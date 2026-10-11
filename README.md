@@ -7,7 +7,7 @@ Hooman in the Loop is a phone-first web app (PWA) for checking a model's results
 - Draw to fix it.
 - Export clean answers and corrected masks.
 
-Any LLM can build a deck from the spec in [app/llms.txt](app/llms.txt). It runs offline, with no account and no server. Everything is stored on the device.
+Any LLM can build a deck from the spec in [app/llms.txt](app/llms.txt). Claude users can add the [hooman-deck-builder skill](https://deke1yahav.github.io/hooman/skill/hooman-deck-builder.zip): it builds and checks decks, and reads the answers back, with tested scripts. The app runs offline, with no account and no server. Everything is stored on the device.
 
 ## Layout
 
@@ -40,6 +40,13 @@ app/                    the whole app: static files, no build step
   js/store.js           IndexedDB: decks, files, answers, append-only log
   js/export.js          answers.csv + answers.json + masks/*.png
   examples/             example decks (built by tools/make_examples.py)
+  skill/                the deck-builder skill as a download (built by tools/build_skill.py)
+skill/hooman-deck-builder/   Claude skill: SKILL.md, scripts/hooman.py (build), check_deck.py (the app's checks),
+                        read_answers.py (summary, kappa, masks); references/ = llms.txt + schema (synced)
+skill/tests/test_skill.py    builds decks, checks parity with the app's messages, imports them in the app
+tools/build_skill.py    syncs the skill's references, zips it into app/skill/, installs it to ~/.claude/skills
+tools/video/            the YouTube user guide: make_video.py (Piper narration, Playwright recording, ffmpeg),
+                        stage.html, script.json / part2.json / part3.json (narration), build_real_deck.py (BBBC CC0 image)
 tools/make_examples.py  builds the example decks (also checks them against the schema)
 tools/make_icons.py     draws the icons
 tests/e2e.py            Playwright test in phone-sized Chromium; screenshots in tests/out/
@@ -66,6 +73,7 @@ python tests/e2e.py
 python tests/e2e_v3.py
 python tests/e2e_v4.py
 python tests/e2e_v5.py
+python skill/tests/test_skill.py
 ```
 
 The test covers:
@@ -95,6 +103,16 @@ git branch -D gh-pages-new
 ```
 
 Any other static HTTPS host works too (Netlify, a lab server): copy `app/` as it is.
+
+## User guide videos
+
+```
+pip install piper-tts playwright imageio-ffmpeg     # + the en_US-ljspeech-high voice
+python tools/video/make_video.py 1                  # part 1: getting started (2 = real masks, 3 = tracking and review)
+python tools/video/make_video.py 2 compose thumb    # only some steps: tts, dryrun (part 2), record, compose, thumb
+```
+
+Each part goes to `video_out/partN/`: the mp4, English subtitles (.srt), a thumbnail, and the YouTube title, description and chapters.
 
 ## Licence
 

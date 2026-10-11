@@ -6,6 +6,8 @@ Hooman in the Loop (https://deke1yahav.github.io/hooman/) is a phone app (a web 
 
 Everything below is the whole format. Every field is optional except the ones marked **required**.
 
+**Claude (and other AI assistants that support skills):** a ready-made skill packs this format with tested Python builders (`from_folder`, `model_duel`, `objects_deck`, `timelapse_deck`, `from_coco`), a checker that reports exactly what the app would refuse, and a reader for the exported answers. Download it from https://deke1yahav.github.io/hooman/skill/hooman-deck-builder.zip (upload it to claude.ai, or unzip it into `~/.claude/skills/`).
+
 ## 1. Smallest deck
 
 ```

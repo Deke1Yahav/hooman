@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hooman-deck-v1",
+  "title": "Hooman in the Loop deck (deck.json), format version 1",
+  "description": "See llms.txt next to this file for the full explanation and recipes.",
+  "type": "object",
+  "required": [
+    "hooman",
+    "cards"
+  ],
+  "properties": {
+    "hooman": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "question": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "help": {
+      "type": "string",
+      "maxLength": 5000
+    },
+    "answers": {
+      "type": "object",
+      "propertyNames": {
+        "enum": [
+          "right",
+          "left",
+          "up",
+          "down"
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/answer"
+      }
+    },
+    "buttons": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "$ref": "#/$defs/answer"
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "guide": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "classes": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "minLength": 1
+              },
+              "label": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "shuffle": {
+      "type": "boolean"
+    },
+    "cards": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/card"
+      }
+    },
+    "mode": {
+      "enum": [
+        "swipe",
+        "annotate",
+        "follow"
+      ]
+    },
+    "frames_are": {
+      "enum": [
+        "channels",
+        "time"
+      ]
+    },
+    "channels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "color": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "channel_view": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "answer": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        {
+          "type": "object",
+          "required": [
+            "label"
+          ],
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "then": {
+              "enum": [
+                "draw",
+                "point",
+                "points",
+                "number",
+                "text"
+              ]
+            },
+            "color": {
+              "type": "string"
+            },
+            "celebrate": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "xy": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "frame": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/path"
+        },
+        {
+          "type": "object",
+          "required": [
+            "image"
+          ],
+          "properties": {
+            "image": {
+              "$ref": "#/$defs/path"
+            },
+            "name": {
+              "type": "string"
+            },
+            "channels": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/path"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "card": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/path"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "image": {
+              "$ref": "#/$defs/path"
+            },
+            "frames": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/frame"
+              }
+            },
+            "question": {
+              "type": "string"
+            },
+            "info": {
+              "type": "string"
+            },
+            "focus": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "overlays": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/overlay"
+              }
+            },
+            "start": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 3
+            },
+            "channels": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/path"
+              }
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "image"
+              ],
+              "not": {
+                "required": [
+                  "frames"
+                ]
+              }
+            },
+            {
+              "required": [
+                "frames"
+              ],
+              "not": {
+                "required": [
+                  "image"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "overlay": {
+      "type": "object",
+      "properties": {
+        "box": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "point": {
+          "$ref": "#/$defs/xy"
+        },
+        "polygon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/xy"
+          },
+          "minItems": 3
+        },
+        "mask": {
+          "$ref": "#/$defs/path"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "style": {
+          "enum": [
+            "outline",
+            "fill",
+            "bold"
+          ]
+        },
+        "frame": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "box"
+          ]
+        },
+        {
+          "required": [
+            "point"
+          ]
+        },
+        {
+          "required": [
+            "polygon"
+          ]
+        },
+        {
+          "required": [
+            "mask"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

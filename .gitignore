@@ -6,3 +6,6 @@ tests/out/
 __pycache__/
 *.pyc
 hooman_qr.png
+skill/hooman-deck-builder/scripts/__pycache__/
+video_work/
+video_out/
