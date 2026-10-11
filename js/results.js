@@ -31,7 +31,24 @@ function duration(ms) {
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 
-export async function renderResults(app, rec, { go, toast, copyText, openCard }) {
+// Fleiss' kappa for several raters: items = [[answer of rater 1, rater 2, ...], ...], all raters on every item.
+export function fleiss(items) {
+  const N = items.length;
+  if (!N) return null;
+  const n = items[0].length, cats = [...new Set(items.flat())], tot = new Map(cats.map((c) => [c, 0]));
+  let P = 0;
+  for (const it of items) {
+    const cnt = new Map();
+    for (const a of it) { cnt.set(a, (cnt.get(a) || 0) + 1); tot.set(a, tot.get(a) + 1); }
+    let s = 0; for (const v of cnt.values()) s += v * v;
+    P += (s - n) / (n * (n - 1));
+  }
+  P /= N;
+  let Pe = 0; for (const v of tot.values()) Pe += (v / (N * n)) ** 2;
+  return { N, raters: n, k: Pe < 1 ? (P - Pe) / (1 - Pe) : 1 };
+}
+
+export async function renderResults(app, rec, { go, toast, copyText, openCard, pickTeam }) {
   const deck = rec.deck;
   const [answers, notes] = await Promise.all([store.answersOf(rec.key), store.notesOf(rec.key)]);
   const defs = answerDefs(rec).concat(deck.answers);
@@ -91,7 +108,8 @@ export async function renderResults(app, rec, { go, toast, copyText, openCard })
     </div>
     <div class="section-title">Agreement</div>
     <div id="agree"><p class="muted" style="font-size:14px;line-height:1.5">Compare with someone else who answered the same deck. Ask them to export (⋮ → Export answers), then pick their file here.</p>
-      <button class="btn quiet" data-r="compare">Compare with another export…</button></div>
+      <div class="stack"><button class="btn quiet" data-r="compare">Compare with another export…</button>
+      ${pickTeam ? `<button class="btn quiet" data-r="team">Compare with the team (Google Drive)…</button>` : ""}</div></div>
     <input type="file" id="cmp-file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream" hidden>
   </main>`;
 
@@ -106,6 +124,23 @@ export async function renderResults(app, rec, { go, toast, copyText, openCard })
       compare(theirs, other.who);
     } catch (e) { toast(e.errors ? e.errors[0] : `Could not read it: ${e.message}`, 3500); }
   });
+
+  let lastTeam = [];
+  function compareTeam(team) {
+    lastTeam = team;
+    const mine = new Map(answers.map((a) => [a.card, a.answer]));
+    const rows = team.map((x, i) => {
+      const pairs = [];
+      for (const [card, t] of x.answers) if (mine.has(card)) pairs.push([mine.get(card), t.answer]);
+      return { i, who: x.who, K: kappa(pairs) };
+    });
+    const everyone = [...mine.keys()].filter((c) => team.every((x) => x.answers.has(c)));
+    const F = fleiss(everyone.map((c) => [mine.get(c), ...team.map((x) => x.answers.get(c).answer)]));
+    app.querySelector("#agree").innerHTML = `${F && F.N ? `<p class="r-duel">All ${F.raters} of you agree with Fleiss' κ <b>${F.k.toFixed(2)}</b> (${kappaWords(F.k)}) on the ${F.N} cards everyone answered.</p>` : ""}
+      <div class="r-table-wrap"><table class="r-table"><thead><tr><th scope="col">you vs</th><th scope="col">cards</th><th scope="col">agree</th><th scope="col">κ</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><th scope="row"><button class="chip" data-who="${r.i}"><span>${esc(r.who)}</span></button></th><td>${r.K.n || 0}</td><td>${r.K.n ? pct(r.K.po) : "–"}</td><td>${r.K.n ? r.K.k.toFixed(2) : "–"}</td></tr>`).join("")}</tbody></table></div>
+      <p class="muted" style="font-size:13px">Tap a name for the details and the cards you disagree on.</p>`;
+  }
 
   function compare(theirs, who) {
     const mine = new Map(answers.map((a) => [a.card, a]));
@@ -131,11 +166,20 @@ export async function renderResults(app, rec, { go, toast, copyText, openCard })
   }
 
   app.onclick = async (e) => {
-    const t = e.target.closest("[data-r],[data-card]");
+    const t = e.target.closest("[data-r],[data-card],[data-who]");
     if (!t) return;
     if (t.dataset.card !== undefined) return openCard(t.dataset.card);
     if (t.dataset.r === "back") return go(`#/deck/${encodeURIComponent(rec.key)}`);
     if (t.dataset.r === "copy") { if (await copyText(summary)) toast("Summary copied"); }
     if (t.dataset.r === "compare") fileIn.click();
+    if (t.dataset.r === "team") {
+      let team;
+      try { team = await pickTeam(); } catch (e) { return toast(e.message, 3500); }
+      team = (team || []).filter((x) => x.answers && x.answers.size);
+      if (!team.length) return;
+      if (team.length === 1) return compare(team[0].answers, team[0].who);
+      compareTeam(team);
+    }
+    if (t.dataset.who !== undefined) { const x = lastTeam[+t.dataset.who]; if (x) compare(x.answers, x.who); }
   };
 }

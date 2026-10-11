@@ -69,6 +69,8 @@ Rules for the zip:
 | `shuffle` | bool | Show the cards in random order (default `false`) |
 | `mode` | text | `"swipe"` (the default when there is a `question`), `"annotate"` (the default without one, section 5) or `"follow"` (manual tracking, section 5b) |
 | `frames_are` | text | `"channels"` (default) or `"time"`. With `"time"`, the mask editor keeps one mask per frame, and an object's number is the same cell in every frame (a track). Follow decks are always `"time"`. |
+| `channels` | list | Several pictures per frame (for example nuclei and cell body), as `[{"name": "electra", "color": "#3ddc97"}, {"name": "Oblique", "color": "#ffffff"}]`. Each frame then has its `image` (channel 1) and `channels` (the others, in order). See 4b. |
+| `channel_view` | text | What a card opens on: a channel's name, `"mix"` (all channels added in their colours) or `"side"` (side by side). Default: the first channel. |
 | `cards` | list | **required**: the cards (section 4) |
 
 ## 3. Answers
@@ -116,6 +118,28 @@ A card is an image path string, or an object:
 | `info` | string | A small caption under the image (scores, metadata) |
 | `focus` | `[x, y, w, h]` | The card opens zoomed to this box, so one object of a big image can be its own card without cropping |
 | `start` | `[x, y]` or `[x, y, frame]` | Follow decks: the cell to follow, in pixels of that frame (default frame 0). Without it, the hooman's first tap picks the cell. |
+| `channels` | list | With `image` in a deck that has `channels`: the image paths of channels 2, 3, … (with `frames`, put `channels` inside each frame instead) |
+
+## 4b. Several channels per frame
+
+When every time point has more than one picture (channels), list the channels once at the top, and give each frame its other channels:
+
+```json
+"frames_are": "time",
+"channels": [{"name": "electra", "color": "#3ddc97"}, {"name": "Oblique", "color": "#ffffff"}],
+"channel_view": "mix",
+"cards": [{"id": "cell7", "frames": [
+  {"name": "t1", "image": "t1_electra.png", "channels": ["t1_oblique.png"]},
+  {"name": "t2", "image": "t2_electra.png", "channels": ["t2_oblique.png"]}]}]
+```
+
+- `image` stays channel 1, so a reader that doesn't know channels still shows something useful.
+- `channels` lists the other channels in the order of the deck's `channels`. Every frame needs exactly that many, all the same size as its `image`.
+- On the phone, chips switch between channels, **Mix** (all channels added in their colours, as in Fiji) and **Side by side**. Switching the frame keeps the channel, and switching the channel keeps the frame.
+- Contrast is set per channel; in Mix each channel keeps its own black and white points. 16-bit PNGs are fine.
+- Overlays, `frame` indexes, per-frame masks and exports are about the **time frame** and ignore the channel. The mask editor's wand reads the channel on screen (channel 1 in Mix).
+- Without `"color"`, a channel named like a dye gets that dye's colour (DAPI blue, GFP green, mCherry/RFP magenta, Cy5 white). Otherwise the channels get magenta, green, blue…
+- Memory: the phone decodes one time frame (all its channels) at a time. Keep images at 1024 px or less on the long side when a card has many frames × channels.
 | `overlays` | list | What a model or algorithm found on this image |
 
 Coordinates are **pixels of the full-size image**: origin at the top-left, x to the right, y down.
@@ -192,6 +216,8 @@ An annotate deck looks like this:
 - The hooman can copy a card's existing overlays (masks, boxes and polygons) into the editor as a starting point.
 - When an overlay's `label` starts with a class name, as in `"apple 0.83"`, the copied object gets that class.
 - On a card with `focus`, a mask contributes only the object(s) that fill the focus box.
+- When a source has `"style": "bold"` overlays on that frame, "Start from" takes only the bold object(s), the object in question, not the whole mask.
+- In a `"frames_are": "time"` deck, "Start from" fills every frame from that model's per-frame overlays, and a model's object keeps one number in all frames ("same number = same cell"). "Pick" keeps that number too.
 - The saved answer is `"annotated"`, or `"empty"` when nothing was drawn.
 
 ## 5b. Follow mode (manual tracking)
@@ -311,7 +337,36 @@ Image.fromarray((a * 255).astype(np.uint8)).save("x.png")
 
 ### 7.6 Several channels
 
-Put the channels in `frames` with names, such as `{"image": "c1.png", "name": "DAPI"}`, or combine them into one RGB image yourself.
+Use `channels` (section 4b), and the hooman can switch between them, mix them, or see them side by side. Older decks that put channels in `frames` still work, but show one at a time.
+
+### 7.7 Time-lapse with several channels (and models to compare)
+
+```python
+import io, json, zipfile, numpy as np
+from PIL import Image
+def png(a):
+    b = io.BytesIO(); Image.fromarray(a).save(b, "PNG"); return b.getvalue()
+deck = {"hooman": 1, "id": "compare-v1", "question": "Which model follows the bold cell right?", "frames_are": "time",
+        "channels": [{"name": "nuclei", "color": "#3ddc97"}, {"name": "body", "color": "#ffffff"}], "channel_view": "mix",
+        "sources": {"A": {}, "B": {}, "look": {"guide": True}},
+        "answers": {"left": {"label": "A right", "value": "A"}, "right": {"label": "B right", "value": "B"},
+                    "up": {"label": "Both wrong", "value": "both_wrong", "then": "draw"}, "down": "Unsure"},
+        "cards": []}
+with zipfile.ZipFile("compare.hooman.zip", "w") as z:
+    for t in range(T):                                   # nuclei[t], body[t]: uint16 HxW; a[t], b[t]: label images
+        z.writestr(f"t{t}_nuclei.png", png(nuclei[t].astype(np.uint16)))
+        z.writestr(f"t{t}_body.png", png(body[t].astype(np.uint16)))
+        z.writestr(f"A_t{t}.png", png(a[t].astype(np.uint16))); z.writestr(f"B_t{t}.png", png(b[t].astype(np.uint16)))
+    frames = [{"name": f"t{t + 1}", "image": f"t{t}_nuclei.png", "channels": [f"t{t}_body.png"]} for t in range(T)]
+    for k in cell_ids:                                   # one card per cell; the same label k in every frame
+        ov = []
+        for t in range(T):
+            ov += [{"source": "A", "mask": f"A_t{t}.png", "frame": t},
+                   {"source": "A", "mask": f"A_t{t}.png", "value": k, "style": "bold", "frame": t},
+                   {"source": "B", "mask": f"B_t{t}.png", "frame": t}]
+        deck["cards"].append({"id": f"cell{k}", "frames": frames, "overlays": ov})
+    z.writestr("deck.json", json.dumps(deck))
+```
 
 ## 8. Check before you hand it over
 

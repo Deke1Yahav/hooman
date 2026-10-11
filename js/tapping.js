@@ -3,9 +3,9 @@
 //   openFollow: manual tracking, the same cell tapped frame after frame (from Cell Follow).
 // Every tap records the mask objects under it (source + label value), so it links to the segmentation's IDs.
 
-import { CardCanvas, labels as loadLabels, viewRect } from "./view.js";
+import { CardCanvas, labels as loadLabels, viewRect, channelColors, channelsOf, framePaths } from "./view.js";
 import { attachTapZoom } from "./gestures.js";
-import { displayFor, openContrast, closeContrast } from "./contrast.js";
+import { displayFor, openContrast, closeContrast, contrastName } from "./contrast.js";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const R1 = (v) => Math.round(v * 10) / 10;
@@ -25,7 +25,7 @@ async function hitsAt(rec, card, frame, x, y) {
 }
 
 // Full-screen shell: bar, chips (contrast, sources, frames), canvas with hint, bottom controls.
-function shell({ rec, card, frame, hidden, title, note, doneLabel, frameButtons = true, bottom }) {
+function shell({ rec, card, frame, hidden, title, note, doneLabel, frameButtons = true, bottom, cview = "one", chan = 0 }) {
   const deck = rec.deck, multi = card.frames.length > 1;
   const el = document.createElement("div");
   el.className = "editor tapper";
@@ -39,29 +39,41 @@ function shell({ rec, card, frame, hidden, title, note, doneLabel, frameButtons 
       <button class="chip" data-t="contrast" aria-label="Contrast"><span>◐</span></button>
       ${deck.sources.filter((s) => !s.guide).map((s) => `<button class="chip" data-src="${esc(s.name)}" aria-pressed="${!hidden.has(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}
       ${multi && frameButtons ? `<span class="sep"></span>${card.frames.map((f, i) => `<button class="chip frame" data-frame="${i}" aria-pressed="${i === frame}"><span>${esc(f.name || i + 1)}</span></button>`).join("")}` : ""}
+      ${framePaths(card, 0).length > 1 ? `<span class="sep"></span><span class="chipset" data-chans></span>` : ""}
     </div>
     <div class="cwrap"><canvas></canvas><div class="ehint"><span></span></div></div>
     ${bottom}`;
   document.body.appendChild(el);
   const view = new CardCanvas(el.querySelector("canvas"));
-  view.display = displayFor(rec.key, card);
+  view.display = displayFor(rec.key, card, deck);
+  view.cview = cview; view.chan = chan;
+  const chanList = channelsOf(deck), chanColors = channelColors(chanList);
+  const chans = () => {
+    const cb = el.querySelector("[data-chans]");
+    if (cb) cb.innerHTML = chanList.map((c, i) => `<button class="chip frame" data-chan="${i}" aria-pressed="${view.cview === "one" && view.chan === i}"><i style="color:${esc(chanColors[i])}"></i><span>${esc(c.name || i + 1)}</span></button>`).join("")
+      + `<button class="chip frame" data-chan="mix" aria-pressed="${view.cview === "mix"}"><span>Mix</span></button>`;
+  };
+  chans();
   const onContrast = () => view.draw(), onResize = () => view.resize();
   window.addEventListener("hooman:contrast", onContrast);
   window.addEventListener("resize", onResize);
   const close = () => { window.removeEventListener("hooman:contrast", onContrast); window.removeEventListener("resize", onResize); closeContrast(); el.remove(); };
   el.addEventListener("click", (e) => {
-    const t = e.target.closest("[data-src],[data-frame],[data-t=contrast]");
+    const t = e.target.closest("[data-src],[data-frame],[data-chan],[data-t=contrast]");
     if (!t) return;
     if (t.dataset.src !== undefined) {
       const n = t.dataset.src;
       if (hidden.has(n)) hidden.delete(n); else hidden.add(n);
       t.setAttribute("aria-pressed", String(!hidden.has(n))); view.setHidden(hidden);
+    } else if (t.dataset.chan !== undefined) {
+      const v = t.dataset.chan;
+      view.setChannels(v === "mix" ? "mix" : "one", v === "mix" ? view.chan : +v); chans();
     } else if (t.dataset.frame !== undefined) {
       view.setFrame(+t.dataset.frame);
       el.querySelectorAll("[data-frame]").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.frame === view.frame)));
     } else {
-      const src = view.sources[view.frame] || view.sources[0];
-      openContrast(rec.key, multi ? card.frames[view.frame].name || "" : "", src.bits === 16);
+      const c = view.activeChannel(), src = view.source(view.frame, c);
+      openContrast(rec.key, contrastName(deck, card, view.frame, c), !!src && src.bits === 16);
     }
   });
   const hint = (text, warn) => { const h = el.querySelector(".ehint span"); h.textContent = text; h.classList.toggle("warn", !!warn); };
@@ -84,9 +96,9 @@ function ring(ctx, v, x, y, color, r = 9, label = "", dashed = false) {
 }
 
 /** One point (multi = false) or several. Resolves {points: [{x, y, frame, hits}]} or null. */
-export function openTapper({ rec, card, frame = 0, hidden = new Set(), multi = false, title = "Tap the image", note = "", color = "#c6ff3d" }) {
+export function openTapper({ rec, card, frame = 0, hidden = new Set(), multi = false, title = "Tap the image", note = "", color = "#c6ff3d", cview = "one", chan = 0 }) {
   return new Promise(async (resolve) => {
-    const S = shell({ rec, card, frame, hidden, title, note, doneLabel: "Save",
+    const S = shell({ rec, card, frame, hidden, title, note, doneLabel: "Save", cview: cview === "side" ? "mix" : cview, chan,
       bottom: `<div class="rowx sizes"><button class="tool small" data-t="undo" aria-label="Undo">↶</button><span class="muted" data-count style="font-size:13px"></span></div>` });
     const { el, view } = S;
     const pts = [];
@@ -118,7 +130,7 @@ export function openTapper({ rec, card, frame = 0, hidden = new Set(), multi = f
       if (t.dataset.t === "done" && pts.length) { S.close(); resolve({ points: pts.slice() }); }
       if (t.dataset.t === "undo") { pts.pop(); update(); }
     });
-    await view.show(rec, card, { frame, hidden });
+    await view.show(rec, card, { frame, hidden, cview: view.cview, chan: view.chan });
     update();
   });
 }
@@ -127,10 +139,10 @@ export function openTapper({ rec, card, frame = 0, hidden = new Set(), multi = f
  * Manual tracking. card.start = [x, y, frame?] is the cell to follow (else the first tap sets it).
  * Resolves {points: [{frame, x, y, hits?} | {frame, missing: true} | {frame, x, y, daughter: 1|2}], end} or null.
  */
-export function openFollow({ rec, card, hidden = new Set(), title = "Follow the cell", note = "" }) {
+export function openFollow({ rec, card, hidden = new Set(), title = "Follow the cell", note = "", cview = "one", chan = 0 }) {
   return new Promise(async (resolve) => {
     const n = card.frames.length;
-    const S = shell({ rec, card, frame: 0, hidden, title, note, frameButtons: false,
+    const S = shell({ rec, card, frame: 0, hidden, title, note, frameButtons: false, cview: cview === "side" ? "mix" : cview, chan,
       bottom: `<div class="tools t4 follow">
           <button class="tool" data-t="missing"><b>∅</b>Not here</button>
           <button class="tool" data-t="divides"><b>⑂</b>Divides</button>
@@ -153,7 +165,7 @@ export function openFollow({ rec, card, hidden = new Set(), title = "Follow the 
     };
     const show = () => {
       if (f >= n) return finish("last_frame");
-      view.frame = peek && f > 0 ? f - 1 : f;
+      view.setFrame(peek && f > 0 ? f - 1 : f);
       el.querySelector("[data-note]").textContent = `frame ${f + 1} of ${n}${card.frames[f].name ? ` · ${card.frames[f].name}` : ""}${peek ? " · previous frame" : ""}`;
       S.hint(divide ? `Tap daughter ${divide} of 2` : !last() ? "Tap the cell to follow" : "Tap the same cell. Hold the image to see the previous frame.");
       el.querySelector("[data-count]").textContent = `${pts.filter((p) => !p.missing).length} taps`;
@@ -205,7 +217,7 @@ export function openFollow({ rec, card, hidden = new Set(), title = "Follow the 
       }
     });
     const r = card.start ? [card.start[0] - 48, card.start[1] - 48, 96, 96] : card.focus ? null : null;
-    await view.show(rec, card, { frame: Math.min(f, n - 1), hidden, rect: r ? fitInside(r, card) : viewRect(card) });
+    await view.show(rec, card, { frame: Math.min(f, n - 1), hidden, rect: r ? fitInside(r, card) : viewRect(card), cview: view.cview, chan: view.chan });
     show();
   });
 }

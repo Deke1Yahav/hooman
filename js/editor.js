@@ -2,10 +2,10 @@
 // Fix: cut, merge, fill holes, delete, move. Objects + classes, undo/redo, channels, contrast.
 // One finger draws, two fingers pan and zoom. The result is a label image (0 = background, 1..n = objects).
 
-import { CardCanvas, labels as loadLabels, outlinePath, intensity, canvas2d } from "./view.js";
+import { CardCanvas, labels as loadLabels, outlinePath, intensity, canvas2d, channelColors, channelsOf, framePaths } from "./view.js";
 import { decodeLabelPNG, encodeLabelPNG } from "./png.js";
 import { prefs } from "./prefs.js";
-import { displayFor, openContrast, closeContrast } from "./contrast.js";
+import { displayFor, openContrast, closeContrast, contrastName } from "./contrast.js";
 
 const PALETTE = ["#c6ff3d", "#ff8fab", "#4fc3f7", "#ffa94d", "#e599f7", "#3ddc97", "#f2c14e", "#b9e3ff", "#ff5d6c", "#9ad0a8"];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -70,7 +70,7 @@ function otsu(vals, lo, hi) {
  * Opens the editor full-screen. Resolves {mask: Blob|null, objects: [{value, class?}], frame, count}, or null when cancelled.
  * initial: {mask: Blob, objects} to keep editing an earlier mask.
  */
-export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial = null, title = "Draw the mask", doneLabel = "Done", note = "" }) {
+export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial = null, title = "Draw the mask", doneLabel = "Done", note = "", cview = "one", chan = 0 }) {
   return new Promise(async (resolve) => {
     const deck = rec.deck, W = card.w, H = card.h, N = W * H;
     const classes = deck.classes || [];
@@ -90,7 +90,8 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       <div class="rowx">
         <button class="chip" data-e="contrast" aria-label="Contrast"><span>◐</span></button>
         ${models.map((s) => `<button class="chip" data-src="${esc(s.name)}" aria-pressed="${!hidden.has(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}
-        ${multi ? `<span class="sep"></span>${card.frames.map((f, i) => `<button class="chip frame" data-frame="${i}" aria-pressed="${i === frame}"><span>${esc(f.name || i + 1)}</span></button>`).join("")}` : ""}
+        ${multi ? `<span class="sep"></span><span class="chipset" data-frames></span>` : ""}
+        ${framePaths(card, 0).length > 1 ? `<span class="sep"></span><span class="chipset" data-chans></span>` : ""}
       </div>
       <div class="cwrap"><canvas></canvas><div class="ehint"></div></div>
       <div class="rowx" data-objects></div>
@@ -108,7 +109,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     document.body.appendChild(el);
     const cv = el.querySelector("canvas");
     const view = new CardCanvas(cv);
-    view.display = displayFor(rec.key, card);
+    view.display = displayFor(rec.key, card, deck);
     const $e = (s) => el.querySelector(s);
 
     // ---- state
@@ -137,6 +138,19 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       return c ? c.value : undefined;
     };
     const ensureAs = (id, label) => { ensure(id); const c = classOfLabel(label); if (c) meta.get(id).cls = c; };
+    const modelIds = new Map();                 // "source|model value" -> object number, the same in every frame
+    let freeFrom = 0;
+    function idFor(source, v, label) {
+      const k = `${source}|${v}`;
+      let id = modelIds.get(k);
+      if (!id) {
+        id = Math.max(freeFrom, nextIdFast());
+        freeFrom = id + 1;
+        modelIds.set(k, id); ensureAs(id, label); noteFrom(id, source, typeof v === "number" ? v : undefined);
+      }
+      return id;
+    }
+    const nextIdFast = () => { let m = 0; for (const k of meta.keys()) if (k > m) m = k; for (let i = 0; i < N; i++) if (lab[i] > m) m = lab[i]; return m + 1; };
     const nextId = () => { let m = 0; for (const L of labs || [lab]) for (let i = 0; i < N; i++) if (L[i] > m) m = L[i]; for (const k of meta.keys()) if (k > m) m = k; return m + 1; };
 
     function setFillPx(i, v) {
@@ -148,7 +162,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     function repaintFill() { for (let i = 0; i < N; i++) setFillPx(i, lab[i]); fctx.putImageData(fdata, 0, 0); }
 
     // ---- changes: each user action is one undo step
-    function begin(kind = tool) { change = { kind, old: new Map(), dirty: [Infinity, Infinity, -Infinity, -Infinity], t0: performance.now() }; }
+    function begin(kind = tool) { change = { kind, old: new Map(), others: new Map(), dirty: [Infinity, Infinity, -Infinity, -Infinity], t0: performance.now() }; }
     // provenance per object: which model it started from (and that model's object numbers), and what was done to it
     const noteFrom = (id, source, value) => {
       ensure(id); const m = meta.get(id);
@@ -163,6 +177,16 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       const x = i % W, y = (i / W) | 0, d = change.dirty;
       if (x < d[0]) d[0] = x; if (y < d[1]) d[1] = y; if (x > d[2]) d[2] = x; if (y > d[3]) d[3] = y;
     }
+    // Time decks: write into a frame that isn't on screen (part of the same undo step).
+    function setPxAt(F, i, v) {
+      if (!perFrame || F === view.frame) return setPx(i, v);
+      const L = labs[F];
+      if (L[i] === v) return;
+      let m = change.others.get(F);
+      if (!m) change.others.set(F, (m = new Map()));
+      if (!m.has(i)) m.set(i, L[i]);
+      L[i] = v;
+    }
     function flush() {
       const d = change && change.dirty;
       if (d && d[2] >= d[0]) fctx.putImageData(fdata, 0, 0, d[0], d[1], d[2] - d[0] + 1, d[3] - d[1] + 1);
@@ -171,11 +195,16 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     function commit() {
       if (!change) return null;
       let step = null;
-      if (change.old.size) {
+      if (change.old.size || change.others.size) {
         const after = new Map(), touched = new Set();
         for (const [i, was] of change.old) { after.set(i, lab[i]); if (was) touched.add(was); if (lab[i]) touched.add(lab[i]); }
+        const others = [...change.others].map(([frame, old]) => {
+          const L = labs[frame], aft = new Map();
+          for (const [i, was] of old) { aft.set(i, L[i]); if (was) touched.add(was); if (L[i]) touched.add(L[i]); }
+          return { frame, old, after: aft };
+        });
         if (!PROVENANCE_ONLY.has(change.kind)) for (const id of touched) { ensure(id); const m = meta.get(id); (m.edits = m.edits || new Set()).add(change.kind); }
-        step = { old: change.old, after, frame: view.frame };
+        step = { old: change.old, after, frame: view.frame, others };
         undoStack.push(step); redoStack = [];
         if (undoStack.length > 60) undoStack.shift();
       }
@@ -186,22 +215,32 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     }
     function revert() {
       if (!change) return;
+      for (const [F, m] of change.others) for (const [i, v] of m) labs[F][i] = v;
       for (const [i, v] of change.old) { lab[i] = v; setFillPx(i, v); }
       fctx.putImageData(fdata, 0, 0);
       change = null; refresh();
     }
-    function applyStep(map) {
-      for (const [i, v] of map) { lab[i] = v; setFillPx(i, v); }
+    function applyStep(step, which) {             // which: "old" (undo) | "after" (redo)
+      for (const o of step.others || []) for (const [i, v] of o[which]) labs[o.frame][i] = v;
+      for (const [i, v] of step[which]) { lab[i] = v; setFillPx(i, v); }
       fctx.putImageData(fdata, 0, 0); refresh();
     }
     const undo = () => {
       if (poly && poly.length) { poly.pop(); if (!poly.length) poly = null; refresh(); return; }
-      const s = undoStack.pop(); if (s) { redoStack.push(s); if (perFrame && s.frame !== view.frame) switchFrame(s.frame); applyStep(s.old); }
+      const s = undoStack.pop(); if (s) { redoStack.push(s); if (perFrame && s.frame !== view.frame) switchFrame(s.frame); applyStep(s, "old"); }
     };
-    const redo = () => { const s = redoStack.pop(); if (s) { undoStack.push(s); if (perFrame && s.frame !== view.frame) switchFrame(s.frame); applyStep(s.after); } };
+    const redo = () => { const s = redoStack.pop(); if (s) { undoStack.push(s); if (perFrame && s.frame !== view.frame) switchFrame(s.frame); applyStep(s, "after"); } };
+    // time frames and channels: two rows of chips; the wand reads the channel on screen (channel 1 in Mix)
+    const chanList = channelsOf(deck), chanColors = channelColors(chanList);
+    const bars = () => {
+      const fb = el.querySelector("[data-frames]"), cb = el.querySelector("[data-chans]");
+      if (fb) fb.innerHTML = card.frames.map((f, i) => `<button class="chip frame" data-frame="${i}" aria-pressed="${i === view.frame}"><span>${esc(f.name || i + 1)}</span></button>`).join("");
+      if (cb) cb.innerHTML = chanList.map((c, i) => `<button class="chip frame" data-chan="${i}" aria-pressed="${view.cview === "one" && view.chan === i}"><i style="color:${esc(chanColors[i])}"></i><span>${esc(c.name || i + 1)}</span></button>`).join("")
+        + `<button class="chip frame" data-chan="mix" aria-pressed="${view.cview === "mix"}"><span>Mix</span></button>`;
+    };
     function switchFrame(i) {
       view.setFrame(i);
-      el.querySelectorAll("[data-frame]").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.frame === view.frame)));
+      bars();
       if (!perFrame) return;
       lab = labs[i]; poly = null; lastWand = null; path = null;
       repaintFill(); refresh();
@@ -254,6 +293,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       else { sz.min = 2; sz.max = 90; sz.step = 1; sz.value = size; sl.textContent = "size"; }
       const hint = $e(".ehint");
       let text = TOOLS[tool][2];
+      if (tool === "wand" && chanList.length > 1) text += ` It reads ${chanList[view.activeChannel()].name || "channel 1"}.`;
       if (tool === "merge") text = mergeInto ? `Tap objects to join them to object ${mergeInto}. Tap the background to start over.` : "Tap the object to keep, then the ones to join to it.";
       hint.innerHTML = `<span>${esc(text)}</span>${tool === "polygon" && poly && poly.length ? `<button class="chip" data-e="polyfill"><span>✓ Fill</span></button><button class="chip" data-e="polycancel"><span>✕</span></button>` : ""}`;
       view.draw();
@@ -284,7 +324,9 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       const i0 = at(p);
       if (i0 < 0) return;
       if (lab[i0] && !forceId) { current = lab[i0]; refresh(); return; }
-      const src = view.sources[view.frame] || view.sources[0], I = intensity(src);
+      const src = view.source(view.frame, view.activeChannel());
+      if (!src) return flashHint("The image is still loading");
+      const I = intensity(src);
       const sx = i0 % W, sy = (i0 / W) | 0;
       const [vx0, vy0] = view.toImage(0, 0), [vx1, vy1] = view.toImage(cv.clientWidth, cv.clientHeight);
       const half = 384, minHalf = 24;
@@ -338,7 +380,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     }
     function rerunWand() {
       if (!lastWand || undoStack[undoStack.length - 1] !== lastWand.step) return;
-      undoStack.pop(); applyStep(lastWand.step.old);
+      undoStack.pop(); applyStep(lastWand.step, "old");
       const { p, id } = lastWand;
       wandAt(p, id);
     }
@@ -354,7 +396,9 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
         if (o.shape === "mask") {
           const L = (await loadLabels(rec.key, o.mask)).labels, v = L[i0];
           if (!v || (o.value && v !== o.value)) continue;
-          const id = freshId(); ensureAs(id, o.label); noteFrom(id, o.source, v);
+          const id = perFrame ? idFor(o.source, v, o.label) : freshId();
+          if (!perFrame) { ensureAs(id, o.label); noteFrom(id, o.source, v); }
+          current = id;
           begin("pick"); for (let i = 0; i < N; i++) if (L[i] === v && !lab[i]) setPx(i, id); commit();
           return;
         }
@@ -455,42 +499,49 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     }
 
     // ---- start from a model's mask / shapes
+    // Time decks fill every frame from that model's per-frame overlays, one number per model cell.
+    // When the source has "bold" overlays, only the bold object(s) are taken (the object in question).
     async function startFrom(name) {
-      const ovs = card.overlays.filter((o) => o.source === name && o.shape !== "point" && (o.frame === undefined || o.frame === view.frame));
+      const frames = perFrame ? card.frames.map((_, f) => f) : [view.frame];
+      freeFrom = nextId();
       begin("start");
-      let next = nextId(), first = null;
-      for (const o of ovs) {
-        if (o.shape === "mask") {
-          const L = (await loadLabels(rec.key, o.mask)).labels;
-          let vals = null;
-          if (o.value) vals = new Set([o.value]);
-          else if (card.focus) {                 // the object(s) this card is about: the biggest inside the focus box
-            const [fx, fy, fw, fh] = card.focus.map(Math.round), counts = new Map();
-            for (let y = Math.max(0, fy); y < Math.min(H, fy + fh); y++) for (let x = Math.max(0, fx); x < Math.min(W, fx + fw); x++) {
-              const v = L[y * W + x]; if (v) counts.set(v, (counts.get(v) || 0) + 1);
+      let first = null;
+      for (const f of frames) {
+        const L0 = perFrame ? labs[f] : lab;
+        const all = card.overlays.filter((o) => o.source === name && o.shape !== "point" && (o.frame === undefined || o.frame === f));
+        const bold = all.filter((o) => o.style === "bold"), ovs = bold.length ? bold : all;
+        for (const o of ovs) {
+          if (o.shape === "mask") {
+            const LM = (await loadLabels(rec.key, o.mask)).labels;
+            let vals = null;
+            if (o.value) vals = new Set([o.value]);
+            else if (card.focus) {                   // the object(s) this card is about: the biggest inside the focus box
+              const [fx, fy, fw, fh] = card.focus.map(Math.round), counts = new Map();
+              for (let y = Math.max(0, fy); y < Math.min(H, fy + fh); y++) for (let x = Math.max(0, fx); x < Math.min(W, fx + fw); x++) {
+                const v = LM[y * W + x]; if (v) counts.set(v, (counts.get(v) || 0) + 1);
+              }
+              const top = Math.max(0, ...counts.values());
+              vals = new Set([...counts].filter(([, n]) => n >= 0.5 * top).map(([v]) => v));
             }
-            const top = Math.max(0, ...counts.values());
-            vals = new Set([...counts].filter(([, n]) => n >= 0.5 * top).map(([v]) => v));
+            for (let i = 0; i < N; i++) {
+              const v = LM[i];
+              if (!v || (vals && !vals.has(v)) || L0[i]) continue;
+              const id = idFor(o.source, v, o.label);
+              setPxAt(f, i, id);
+              if (first === null && f === view.frame) first = id;
+            }
+          } else {
+            const pts = o.shape === "box" ? [[o.box[0], o.box[1]], [o.box[0] + o.box[2], o.box[1]], [o.box[0] + o.box[2], o.box[1] + o.box[3]], [o.box[0], o.box[1] + o.box[3]]] : o.polygon;
+            const id = idFor(o.source, `#${card.overlays.indexOf(o)}`, o.label);
+            for (const i of polygonPixels(pts, W, H)) if (!L0[i]) setPxAt(f, i, id);
+            if (first === null && f === view.frame) first = id;
           }
-          const idmap = new Map();
-          for (let i = 0; i < N; i++) {
-            const v = L[i];
-            if (!v || (vals && !vals.has(v)) || lab[i]) continue;
-            let id = idmap.get(v);
-            if (!id) { id = next++; idmap.set(v, id); ensureAs(id, o.label); noteFrom(id, o.source, v); }
-            setPx(i, id);
-          }
-          if (first === null && idmap.size) first = [...idmap.values()][0];
-        } else {
-          const pts = o.shape === "box" ? [[o.box[0], o.box[1]], [o.box[0] + o.box[2], o.box[1]], [o.box[0] + o.box[2], o.box[1] + o.box[3]], [o.box[0], o.box[1] + o.box[3]]] : o.polygon;
-          const id = next++; ensureAs(id, o.label); noteFrom(id, o.source);
-          fillPolygon(pts, id);
-          if (first === null) first = id;
         }
       }
       repaintFill();                             // classes may have changed colours
       if (first !== null) current = first;
       commit();
+      if (perFrame) flashHint(`Filled ${frames.length} frames from ${models.find((m) => m.name === name).label}`);
     }
 
     // ---- drawing the hooman layer on top of the image
@@ -646,7 +697,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       tool = t; prefs.set("tool", tool); refresh();
     }
     el.addEventListener("click", (e) => {
-      const t = e.target.closest("[data-e],[data-tool],[data-obj],[data-cls],[data-src],[data-from],[data-frame]");
+      const t = e.target.closest("[data-e],[data-tool],[data-obj],[data-cls],[data-src],[data-from],[data-frame],[data-chan]");
       if (!t) return;
       if (t.dataset.tool) return setTool(t.dataset.tool);
       if (t.dataset.obj) { current = +t.dataset.obj; refresh(); return; }
@@ -657,16 +708,18 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
         t.setAttribute("aria-pressed", String(!hidden.has(n))); view.setHidden(hidden); return;
       }
       if (t.dataset.frame !== undefined) return switchFrame(+t.dataset.frame);
+      if (t.dataset.chan !== undefined) { const v = t.dataset.chan; view.setChannels(v === "mix" ? "mix" : "one", v === "mix" ? view.chan : +v); bars(); refresh(); return; }
       if (t.dataset.from !== undefined) { startFrom(t.dataset.from); return; }
       const a = t.dataset.e;
       if (a === "undo") undo();
       else if (a === "redo") redo();
       else if (a === "new") newObject();
       else if (a === "polyfill") closePolygon();
+
       else if (a === "polycancel") { poly = null; refresh(); }
       else if (a === "contrast") {
-        const src = view.sources[view.frame] || view.sources[0];
-        openContrast(rec.key, multi ? card.frames[view.frame].name || "" : "", src.bits === 16);
+        const c = view.activeChannel(), src = view.source(view.frame, c);
+        openContrast(rec.key, contrastName(deck, card, view.frame, c), !!src && src.bits === 16);
       }
       else if (a === "clear") { begin("clear"); for (let i = 0; i < N; i++) if (lab[i]) setPx(i, 0); fctx.putImageData(fdata, 0, 0); commit(); }
       else if (a === "done") finish();
@@ -702,7 +755,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     document.addEventListener("keydown", onKey, true);
     const onResize = () => view.resize();
     window.addEventListener("resize", onResize);
-    el._debug = () => { const ids = presentIds(); let px = 0; for (let i = 0; i < N; i++) if (lab[i]) px++; return { objects: ids.size, pixels: px, current, tool, frame: view.frame, view: { s: view.s, ox: view.ox, oy: view.oy }, classes: [...ids].map((id) => (meta.get(id) || {}).cls || null) }; };
+    el._debug = () => { const ids = presentIds(); let px = 0; for (let i = 0; i < N; i++) if (lab[i]) px++; return { objects: ids.size, pixels: px, current, tool, frame: view.frame, chan: view.activeChannel(), cview: view.cview, view: { s: view.s, ox: view.ox, oy: view.oy }, classes: [...ids].map((id) => (meta.get(id) || {}).cls || null) }; };
 
     // ---- load: earlier mask, then show
     const loadInto = async (blob, L) => {
@@ -719,7 +772,8 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     current = ids.size ? Math.min(...ids) : 1;
     for (const id of ids) ensure(id);
     repaintFill();
-    await view.show(rec, card, { frame, hidden });
+    await view.show(rec, card, { frame, hidden, cview: cview === "side" ? "mix" : cview, chan });
+    bars();
     refresh();
   });
 }
