@@ -23,5 +23,10 @@
   "file": "fruit.hooman.zip",
   "title": "Mask the fruit",
   "about": "No question: draw masks with classes (apple, orange, leaf). Shows the mask editor."
+ },
+ {
+  "file": "nuclei.hooman.zip",
+  "title": "Fix the nuclei (16-bit)",
+  "about": "Raw 16-bit microscopy, 2 channels, auto contrast. Fix a model's merged, split and missed nuclei."
  }
 ]
