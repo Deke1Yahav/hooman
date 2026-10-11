@@ -189,8 +189,9 @@ export class CardCanvas {
     const src = this.sources[this.frame] || this.sources[0];
     ctx.drawImage(rendered(src, this.display ? this.display(this.frame) : null), ox, oy, card.w * s, card.h * s);
     const labelsToDraw = [];
+    const guides = new Set(this.rec.deck.sources.filter((g) => g.guide).map((g) => g.name));
     for (const L of this.layers) {
-      const o = L.o;
+      const o = L.o, bold = o.style === "bold", guide = guides.has(o.source);
       if (this.hidden.has(o.source) || (o.frame !== undefined && o.frame !== this.frame)) continue;
       ctx.save();
       ctx.translate(ox, oy); ctx.scale(s, s);
@@ -207,17 +208,21 @@ export class CardCanvas {
         anchor = o.polygon.reduce((a, p) => (p[1] < a[1] ? p : a), o.polygon[0]);
         if (o.style === "fill") { ctx.globalAlpha = 0.3; ctx.fillStyle = L.color; ctx.fill(path); ctx.globalAlpha = 1; }
       }
-      if (path) {
-        ctx.strokeStyle = "rgba(0,0,0,.55)"; ctx.lineWidth = 3.2 / s; ctx.stroke(path);
-        ctx.strokeStyle = L.color; ctx.lineWidth = 1.6 / s; ctx.stroke(path);
+      if (path) {                               // guides are dashed; "bold" makes one object stand out
+        const w = bold ? 3.6 : 1.6;
+        if (guide) ctx.setLineDash([6 / s, 4 / s]);
+        ctx.strokeStyle = "rgba(0,0,0,.55)"; ctx.lineWidth = (w + 1.8) / s; ctx.stroke(path);
+        ctx.strokeStyle = L.color; ctx.lineWidth = w / s; ctx.stroke(path);
+        ctx.setLineDash([]);
       }
       ctx.restore();
       if (o.shape === "point") {
         const x = ox + o.point[0] * s, y = oy + o.point[1] * s;
-        ctx.lineWidth = 3.5; ctx.strokeStyle = "rgba(0,0,0,.55)";
-        ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.stroke();
-        ctx.lineWidth = 2; ctx.strokeStyle = L.color;
-        ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.stroke();
+        const pr = bold ? 11 : 8;
+        ctx.lineWidth = bold ? 5.5 : 3.5; ctx.strokeStyle = "rgba(0,0,0,.55)";
+        ctx.beginPath(); ctx.arc(x, y, pr, 0, 7); ctx.stroke();
+        ctx.lineWidth = bold ? 3.4 : 2; ctx.strokeStyle = L.color;
+        ctx.beginPath(); ctx.arc(x, y, pr, 0, 7); ctx.stroke();
         ctx.fillStyle = L.color; ctx.beginPath(); ctx.arc(x, y, 2, 0, 7); ctx.fill();
         anchor = [o.point[0] + 10 / s, o.point[1] - 8 / s];
       }
