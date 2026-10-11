@@ -1,0 +1,7 @@
+# private: lab pages, screenshots of lab data, planning notes
+reference/
+BRIEF.md
+# test output
+tests/out/
+__pycache__/
+*.pyc
