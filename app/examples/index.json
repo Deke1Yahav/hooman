@@ -33,5 +33,10 @@
   "file": "follow.hooman.zip",
   "title": "Follow the cells",
   "about": "Manual tracking: tap the same cell frame after frame. One cell divides."
+ },
+ {
+  "file": "channels.hooman.zip",
+  "title": "2 channels over time",
+  "about": "16-bit time-lapse with 2 channels per frame (Mix, side by side), 2 models, 8 answers."
  }
 ]

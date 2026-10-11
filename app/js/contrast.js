@@ -13,7 +13,9 @@ export function contrastFor(deckKey, frameName) {
   return (frameName && c.byName && c.byName[frameName]) || c.all || null;
 }
 // The function a CardCanvas calls per frame index.
-export const displayFor = (deckKey, card) => (i) => contrastFor(deckKey, card.frames.length > 1 ? card.frames[i] && card.frames[i].name : "");
+export const contrastName = (deck, card, f, c = 0) => (deck.channels && deck.channels.length > 1
+  ? (deck.channels[c] || {}).name || "" : card.frames.length > 1 ? (card.frames[f] && card.frames[f].name) || "" : "");
+export const displayFor = (deckKey, card, deck) => (f, c = 0) => contrastFor(deckKey, contrastName(deck || {}, card, f, c));
 
 function save(deckKey, frameName, params) {
   const c = load(deckKey);
@@ -43,7 +45,7 @@ export function openContrast(deckKey, frameName, is16) {
       <label class="cp-row">White<input type="range" min="50" max="100" step="0.1" value="${p.max}" data-k="max"><span class="mono">${(+p.max).toFixed(1)}%</span></label>
       <label class="cp-row">Gamma<input type="range" min="-2" max="2" step="0.05" value="${Math.log2(p.gamma || 1)}" data-k="gamma"><span class="mono">${(p.gamma || 1).toFixed(2)}</span></label>
       <div class="cp-foot"><label class="cp-inv"><input type="checkbox" data-k="invert" ${p.invert ? "checked" : ""}> Invert</label>
-        ${frameName ? `<span class="seg"><button data-scope="" aria-pressed="${!scope}">All frames</button><button data-scope="${esc(frameName)}" aria-pressed="${!!scope}">Only ${esc(frameName)}</button></span>` : ""}</div>`;
+        ${frameName ? `<span class="seg"><button data-scope="" aria-pressed="${!scope}">All</button><button data-scope="${esc(frameName)}" aria-pressed="${!!scope}">Only ${esc(frameName)}</button></span>` : ""}</div>`;
   };
   const read = () => {
     const v = (k) => el.querySelector(`[data-k=${k}]`);

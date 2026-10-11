@@ -332,6 +332,61 @@ def fruit_deck():
     write_deck("fruit.hooman.zip", deck, files)
 
 
+# ---------------------------------------------------------------- 8. time-lapse with 2 channels per frame (16-bit), 2 models, 8 answers
+def channels_deck():
+    from scipy.ndimage import gaussian_filter
+    files, cards = {}, []
+    S, T, n = 256, 3, 7
+    r = np.random.default_rng(1200)
+    yy, xx = np.mgrid[0:S, 0:S]
+    pos, vel = r.uniform(50, S - 50, (n, 2)), r.uniform(-7, 7, (n, 2))
+    for i in range(n):                          # keep the cells apart
+        for j in range(i):
+            if np.hypot(*(pos[i] - pos[j])) < 46:
+                pos[i] = (pos[i] + 46 * (pos[i] - pos[j]) / max(1, np.hypot(*(pos[i] - pos[j])))) % (S - 60) + 30
+    for t in range(T):
+        body = np.zeros((S, S), np.uint16); nuc = np.zeros((S, S), np.uint16)
+        for k in range(n):
+            cx, cy = pos[k] + vel[k] * t
+            body[(((xx - cx) / 21) ** 2 + ((yy - cy) / 17) ** 2 <= 1) & (body == 0)] = k + 1
+            nuc[(((xx - cx) / 9) ** 2 + ((yy - cy) / 7) ** 2 <= 1)] = k + 1
+        ch_nuc = gaussian_filter(250 + (nuc > 0) * 520.0, 1.3) + 25 * r.standard_normal((S, S))
+        ch_body = gaussian_filter(400 + (body > 0) * 260.0 + (nuc > 0) * 80.0, 2.0) + 30 * r.standard_normal((S, S))
+        files[f"t{t}_nuclei.png"] = png_bytes(np.clip(ch_nuc, 0, 4095).astype(np.uint16))
+        files[f"t{t}_body.png"] = png_bytes(np.clip(ch_body, 0, 4095).astype(np.uint16))
+        a = body.copy()                         # model A: cell bodies, merges cells 1+2 in the last frame
+        if t == T - 1: a[a == 2] = 1
+        b = np.zeros_like(body)                 # model B: grown nuclei (too small for the bodies)
+        for k in range(n):
+            b[(nuc == k + 1)] = k + 1
+        from scipy.ndimage import grey_dilation
+        b = grey_dilation(b, size=(7, 7)).astype(np.uint16)
+        files[f"a_t{t}.png"] = png_bytes(a); files[f"b_t{t}.png"] = png_bytes(b)
+    frames = [{"name": f"t{t + 1}", "image": f"t{t}_nuclei.png", "channels": [f"t{t}_body.png"]} for t in range(T)]
+    for k in [1, 2, 3, 4]:
+        cx, cy = pos[k - 1]
+        ov = []
+        for t in range(T):
+            ov += [{"source": "A", "mask": f"a_t{t}.png", "frame": t}, {"source": "A", "mask": f"a_t{t}.png", "value": k, "style": "bold", "frame": t},
+                   {"source": "B", "mask": f"b_t{t}.png", "frame": t}]
+        ov.append({"source": "look", "box": [round(float(cx) - 30), round(float(cy) - 26), 60, 52], "frame": 0})
+        cards.append({"id": f"cell{k}", "frames": frames, "overlays": ov,
+                      "info": f"cell {k} · model A (bold) vs model B over {T} frames · 16-bit"})
+    deck = {
+        "hooman": 1, "id": "example-channels", "title": "Example · 2 channels over time",
+        "question": "Which model follows the bold cell right?",
+        "frames_are": "time",
+        "channels": [{"name": "nuclei", "color": "#3ddc97"}, {"name": "body", "color": "#ffffff"}],
+        "channel_view": "mix",
+        "sources": {"A": {"label": "Model A"}, "B": {"label": "Model B"}, "look": {"guide": True}},
+        "answers": {"left": {"label": "A right", "value": "A"}, "right": {"label": "B right", "value": "B"},
+                    "up": {"label": "Both wrong", "value": "both_wrong", "then": "draw"}, "down": "Unsure"},
+        "buttons": [{"label": "Division", "value": "division", "then": "points"}, "Dead", "Debris", "Out of focus"],
+        "cards": cards,
+    }
+    write_deck("channels.hooman.zip", deck, files)
+
+
 # ---------------------------------------------------------------- 7. follow mode: manual tracking
 def follow_deck():
     files, cards = {}, []
@@ -417,12 +472,13 @@ def nuclei_deck():
         files[f"img/{name}_dapi.png"] = png_bytes(np.clip(nuc, 0, 4095).astype(np.uint16))
         files[f"img/{name}_membrane.png"] = png_bytes(np.clip(mem, 0, 4095).astype(np.uint16))
         files[f"model/{name}.png"] = png_bytes(model)
-        cards.append({"id": name, "frames": [{"image": f"img/{name}_dapi.png", "name": "DAPI"}, {"image": f"img/{name}_membrane.png", "name": "Membrane"}],
+        cards.append({"id": name, "image": f"img/{name}_dapi.png", "channels": [f"img/{name}_membrane.png"],
                       "info": f"{name} · raw 12-bit in 16-bit PNG", "overlays": [{"source": "model", "mask": f"model/{name}.png"}]})
     deck = {
         "hooman": 1, "id": "example-nuclei", "title": "Example · Fix the nuclei (16-bit)",
         "question": "Did the model segment every nucleus right?",
         "help": "Raw 16-bit images: the app picks the contrast (◐ to change it). If anything is wrong, swipe up: Pick or Start from model, then Cut merged nuclei, Merge split ones, Wand the missed ones.",
+        "channels": [{"name": "DAPI"}, {"name": "Membrane"}],
         "sources": {"model": {"label": "Model", "color": "#4fc3f7"}},
         "answers": {"right": {"label": "All right", "value": "ok", "celebrate": True}, "up": {"label": "Fix it", "value": "fixed", "then": "draw"}, "down": "Unsure"},
         "cards": cards,
@@ -431,6 +487,7 @@ def nuclei_deck():
 
 
 if __name__ == "__main__":
+    channels_deck()
     follow_deck()
     nuclei_deck()
     fruit_deck()
@@ -446,6 +503,7 @@ if __name__ == "__main__":
         {"file": "fruit.hooman.zip", "title": "Mask the fruit", "about": "No question: draw masks with classes (apple, orange, leaf). Shows the mask editor."},
         {"file": "nuclei.hooman.zip", "title": "Fix the nuclei (16-bit)", "about": "Raw 16-bit microscopy, 2 channels, auto contrast. Fix a model's merged, split and missed nuclei."},
         {"file": "follow.hooman.zip", "title": "Follow the cells", "about": "Manual tracking: tap the same cell frame after frame. One cell divides."},
+        {"file": "channels.hooman.zip", "title": "2 channels over time", "about": "16-bit time-lapse with 2 channels per frame (Mix, side by side), 2 models, 8 answers."},
     ]
     (OUT / "index.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
     print("index.json written")

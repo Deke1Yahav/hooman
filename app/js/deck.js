@@ -7,8 +7,8 @@ const SLOT_COLORS = { right: "#3ddc97", left: "#ff5d6c", up: "#f2c14e", down: "#
 const BUTTON_COLORS = ["#4fc3f7", "#ff8fab", "#c6ff3d", "#ffa94d", "#b9e3ff", "#e599f7"];
 export const DEFAULT_ANSWERS = { right: "Yes", left: "No", up: "Unsure" };
 
-const TOP = ["hooman", "id", "title", "question", "help", "answers", "buttons", "sources", "classes", "shuffle", "cards", "mode", "frames_are"];
-const CARD = ["id", "image", "frames", "question", "info", "focus", "overlays", "start"];
+const TOP = ["hooman", "id", "title", "question", "help", "answers", "buttons", "sources", "classes", "shuffle", "cards", "mode", "frames_are", "channels", "channel_view"];
+const CARD = ["id", "image", "frames", "question", "info", "focus", "overlays", "start", "channels"];
 export const THEN = ["draw", "point", "points", "number", "text"];
 const OVERLAY = ["box", "point", "polygon", "mask", "source", "label", "value", "style", "frame"];
 const HINTS = {
@@ -74,6 +74,40 @@ export function normalizeDeck(raw, files, fileName = "deck") {
   if (mode === "annotate") question = null;
   if (raw.frames_are !== undefined && !["channels", "time"].includes(raw.frames_are)) err('deck.json: "frames_are" must be "channels" or "time"');
   const framesAre = raw.frames_are === "time" || (raw.frames_are === undefined && mode === "follow") ? "time" : "channels";
+  // channels: several pictures per time frame (nuclei + cell body...). "image" stays channel 1.
+  let channels = null;
+  if (raw.channels !== undefined) {
+    if (!Array.isArray(raw.channels) || raw.channels.length < 1 || raw.channels.length > 8) err('deck.json: "channels" must be a list of 1 to 8 channels, like [{"name": "nuclei", "color": "#3ddc97"}, {"name": "body", "color": "#ffffff"}]');
+    else {
+      channels = raw.channels.map((c, k) => {
+        if (isStr(c)) return { name: c.trim() };
+        if (!c || typeof c !== "object" || !isStr(c.name)) { err(`channels[${k}]: needs a "name", like {"name": "nuclei", "color": "#3ddc97"}`); return { name: `channel ${k + 1}` }; }
+        unknownKeys(c, ["name", "color"], `channels[${k}]`, warn);
+        return { name: c.name.trim(), ...(isStr(c.color) ? { color: c.color.trim() } : {}) };
+      });
+      if (new Set(channels.map((c) => c.name)).size !== channels.length) err("deck.json: the channel names must all be different");
+    }
+  }
+  const C = channels ? channels.length : 1;
+  const later = () => channels.slice(1).map((c) => q(c.name)).join(", ");
+  let channelView = 0;
+  if (raw.channel_view !== undefined) {
+    const v = raw.channel_view, idx = channels ? channels.findIndex((c) => c.name === v) : -1;
+    if ((v === "mix" || v === "side") && channels) channelView = v;
+    else if (idx >= 0) channelView = idx;
+    else err(`deck.json: "channel_view" must be "mix", "side" or one channel's name${channels ? ` (${channels.map((c) => q(c.name)).join(", ")})` : `, and it needs "channels"`}`);
+  }
+  // A frame's other channels (after "image"), checked against the deck's "channels".
+  const extraChannels = (list, where) => {
+    if (list === undefined) {
+      if (C > 1) err(`${where}: the deck has ${C} "channels", so this needs "channels": [${C - 1} more image path${C > 2 ? "s" : ""}] for ${later()}, after "image"`);
+      return [];
+    }
+    if (C === 1) { err(`${where}: has "channels" but the deck doesn't list its channels; add "channels": [{"name": ...}, {"name": ...}] at the top of deck.json`); return []; }
+    if (!Array.isArray(list)) { err(`${where}: "channels" must be a list of image paths, one for each of ${later()}`); return []; }
+    if (list.length !== C - 1) err(`${where}: has ${list.length} extra channel image${list.length === 1 ? "" : "s"}, but the deck has ${C} "channels", so it needs ${C - 1} (${later()}) after "image"`);
+    return list.map((p, k) => checkPath(p, `${where} channels[${k}]`) || String(p));
+  };
   if (raw.shuffle !== undefined && typeof raw.shuffle !== "boolean") err("deck.json: \"shuffle\" must be true or false");
 
   // sources first: answer colours can come from them
@@ -180,19 +214,22 @@ export function normalizeDeck(raw, files, fileName = "deck") {
     let card;
     if (typeof c === "string") {
       const path = checkPath(c, at());
-      card = { id: c.trim(), frames: [{ path: path || c, name: "" }], overlays: [] };
+      if (C > 1) err(`${at()}: a plain image path can't hold the deck's ${C} channels; write {"image": ${q(c)}, "channels": [...]} instead`);
+      card = { id: c.trim(), frames: [{ path: path || c, name: "", channels: [path || c] }], overlays: [] };
     } else if (c && typeof c === "object" && !Array.isArray(c)) {
       const where = at(c.id !== undefined ? ` (id ${q(c.id)})` : "");
       unknownKeys(c, CARD, where, warn);
       let frames = [];
       if (c.image !== undefined && c.frames !== undefined) err(`${where}: use either "image" or "frames", not both`);
-      if (c.image !== undefined) frames = [{ path: checkPath(c.image, `${where} image`) || String(c.image), name: "" }];
+      if (c.frames !== undefined && c.channels !== undefined) err(`${where}: with "frames", put "channels" inside each frame, not on the card`);
+      if (c.image !== undefined) { const p0 = checkPath(c.image, `${where} image`) || String(c.image); frames = [{ path: p0, name: "", channels: [p0, ...extraChannels(c.channels, where)] }]; }
       else if (c.frames !== undefined) {
         if (!Array.isArray(c.frames) || c.frames.length === 0) err(`${where}: "frames" must be a non-empty list`);
         else frames = c.frames.map((f, j) => {
           const fp = typeof f === "object" && f ? f.image : f;
           const name = typeof f === "object" && f && isStr(f.name) ? f.name.trim() : String(j + 1);
-          return { path: checkPath(fp, `${where} frames[${j}]`) || String(fp), name };
+          const p0 = checkPath(fp, `${where} frames[${j}]`) || String(fp);
+          return { path: p0, name, channels: [p0, ...extraChannels(typeof f === "object" && f ? f.channels : undefined, `${where} frames[${j}]`)] };
         });
       } else err(`${where}: needs "image": "path/to/image.jpg" (or "frames": [...])`);
       const cid = c.id !== undefined ? c.id : frames[0] ? frames[0].path : `card${i}`;
@@ -271,7 +308,7 @@ export function normalizeDeck(raw, files, fileName = "deck") {
     { slot: "button", label: "Divides", value: "divides", color: "#b48cff" },
     { slot: "button", label: "Leaves view", value: "leaves", color: "#f2c14e" },
   ];
-  const deck = { hooman: FORMAT, id, title, question, mode, framesAre, help: isStr(raw.help) ? raw.help : "", shuffle: !!raw.shuffle, answers: finalAnswers, sources, classes, cards };
+  const deck = { hooman: FORMAT, id, title, question, mode, framesAre, ...(channels ? { channels, channelView } : {}), help: isStr(raw.help) ? raw.help : "", shuffle: !!raw.shuffle, answers: finalAnswers, sources, classes, cards };
   return { deck, errors, warnings, paths };
 }
 

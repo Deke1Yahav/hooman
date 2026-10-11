@@ -26,6 +26,11 @@ app/                    the whole app: static files, no build step
   js/results.js         results: counts, 95% Wilson intervals, Cohen's kappa vs another export
   js/backup.js          backup / restore (merging), restoring a deck's own .answers.zip
   js/settings.js        annotator name, colour-blind palette, backup bookkeeping
+  js/share.js           deck.json rebuilt from a stored deck, deck zips, QR codes, Drive link ids
+  js/photos.js          "New deck from photos" (no AI)
+  js/drive.js           Google Drive: sign-in, Picker, download/upload, share links (drive.file scope)
+  js/config.js          the Google Cloud ids for this copy of the app (empty = Drive features hidden)
+  vendor/qrcode.mjs     QR code generator (Kazuhiko Arase, MIT)
   js/prefs.js           per-viewer settings (localStorage)
   js/deck.js            deck.json -> normalized deck + LLM-pasteable errors
   js/importer.js        zip / deck.json / link import, size checks
@@ -40,6 +45,8 @@ tools/make_icons.py     draws the icons
 tests/e2e.py            Playwright test in phone-sized Chromium; screenshots in tests/out/
 tests/e2e_v3.py         0.3 features: tap/follow answers, notes, number/text, per-frame masks, results,
                         backup/restore, guides, bold, provenance, storage check, copy for the AI, colours
+tests/e2e_v4.py         0.4: decks from photos, sharing (file, link, QR), Drive features against a stand-in Google
+tests/e2e_v5.py         0.4: channels per time frame, narrow-card layout, Start from across frames / bold only
 reference/              the earlier claude.ai pages this app grew from (read-only)
 ```
 
@@ -57,6 +64,8 @@ The service worker and the share target need HTTPS or localhost. Everything else
 ```
 python tests/e2e.py
 python tests/e2e_v3.py
+python tests/e2e_v4.py
+python tests/e2e_v5.py
 ```
 
 The test covers:

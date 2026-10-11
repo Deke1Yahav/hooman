@@ -2,16 +2,20 @@
 
 import * as store from "./store.js";
 import { importBlob, importURL, saveDeck } from "./importer.js";
-import { CardCanvas, viewRect, frameSource, maskLayer, rendered } from "./view.js";
+import { CardCanvas, viewRect, frameSource, maskLayer, rendered, channelColors, channelsOf, framePaths } from "./view.js";
 import { answerDefs, DIRS, slug } from "./deck.js";
 import { buildExport, shareOrDownload, APP_VERSION } from "./export.js";
 import { openEditor, editorOpen } from "./editor.js";
 import { prefs } from "./prefs.js";
-import { displayFor, openContrast, closeContrast } from "./contrast.js";
+import { displayFor, openContrast, closeContrast, contrastName } from "./contrast.js";
 import { annotator, setAnnotator, colorMode, setColorMode, themed, untone, lastBackup, markBackup } from "./settings.js";
 import { openTapper, openFollow } from "./tapping.js";
 import { zipKind, buildBackup, restoreBackup, restoreAnswers } from "./backup.js";
 import { renderResults } from "./results.js";
+import { buildDeckZip, qrSVG, deckLink } from "./share.js";
+import { buildPhotoDeck } from "./photos.js";
+import * as drive from "./drive.js";
+import { readAnswers } from "./backup.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -145,6 +149,8 @@ async function home() {
       <button class="btn quiet" data-act="link">From a link</button>
       <button class="btn quiet" data-act="ai">✨ Make a deck with AI</button>
       <button class="btn quiet" data-act="examples">Try an example</button>
+      <button class="btn quiet ${drive.googleReady() ? "" : "wide"}" data-act="photos">📷 New deck from photos</button>
+      ${drive.googleReady() ? `<button class="btn quiet" data-act="drive">Open from Google Drive</button>` : ""}
     </div>
     <div class="section-title">Your decks</div>
     ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.</div>`}
@@ -153,11 +159,13 @@ async function home() {
   <input type="file" id="file" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json,application/octet-stream" hidden>`;
   const file = $("#file");
   file.addEventListener("change", () => { const f = file.files[0]; file.value = ""; if (f) importFile(f); });
+  drive.warmUp();
   app.onclick = (e) => {
     const b = e.target.closest("[data-act],[data-open]");
     if (!b) return;
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
-    ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false) })[b.dataset.act]();
+    ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
+       photos: photosSheet, drive: openFromDrive })[b.dataset.act]();
   };
 }
 
@@ -361,7 +369,8 @@ async function openDeck(key, params) {
   const cardsById = new Map(rec.deck.cards.map((c) => [c.id, c]));
   const order = (rec.order || rec.deck.cards.map((c) => c.id)).filter((id) => cardsById.has(id));
   S = { rec, key, answers, notes, cardsById, order, pos: -1, stack: [], frame: 0, busy: false, autoEdit: modeOf(rec.deck) !== "swipe",
-        hidden: new Set(prefs.get(`hidden:${key}`, [])), revisit: params.get("from") === "review" };
+        hidden: new Set(prefs.get(`hidden:${key}`, [])), revisit: params.get("from") === "review",
+        ...channelStart(key, rec.deck) };
   const want = params.get("card");
   if (want && cardsById.has(want)) S.pos = order.indexOf(want);
   else {
@@ -371,6 +380,13 @@ async function openDeck(key, params) {
   buildDeckScreen();
   showCard();
   if (!prefs.get("toured", false)) tourSheet();
+}
+
+// The channel view a deck opens in: the hooman's last choice, else the deck's "channel_view", else channel 1.
+function channelStart(key, deck) {
+  const saved = prefs.get(`chview:${key}`, null), dv = deck.channelView, n = channelsOf(deck).length;
+  if (saved && (saved.cview !== "one" || saved.chan < n)) return { cview: saved.cview, chan: Math.min(saved.chan || 0, n - 1) };
+  return dv === "mix" || dv === "side" ? { cview: dv, chan: 0 } : { cview: "one", chan: typeof dv === "number" ? dv : 0 };
 }
 
 function defsNow() {
@@ -432,6 +448,19 @@ function renderAnswerButtons() {
       ${ARROW[d.slot] ? `<span class="arrow">${ARROW[d.slot]}</span>` : ""}<span class="lbl">${esc(d.label)}</span></button>`;
   const L = S.dirDefs.get("left"), R = S.dirDefs.get("right"), U = S.dirDefs.get("up"), D = S.dirDefs.get("down");
   let h = "";
+  const total = S.dirDefs.size + S.buttonDefs.length, compact = total > 6 || !!S.forceCompact;
+  el.classList.toggle("compact", compact);
+  $(".deckscreen").classList.toggle("compact", compact);
+  if (compact) {
+    const dirs = [L, R, U, D].filter(Boolean), nb = S.buttonDefs.length;
+    h += dirs.map((d) => btn(d, "", 12 / dirs.length)).join("");
+    const per = nb <= 4 ? nb : nb <= 6 ? 3 : 4;
+    h += S.buttonDefs.map((d) => btn(d, "", 12 / Math.max(1, per))).join("");
+    h += `<button class="ans undo" data-act="undo" style="grid-column:span 12"><span class="lbl">Undo</span></button>`;
+    el.innerHTML = h;
+    $("#hint").textContent = "";
+    return;
+  }
   const row1 = [L, R].filter(Boolean);
   h += row1.map((d) => btn(d, "big", row1.length === 1 ? 6 : 3)).join("");
   const row2 = [U, D].filter(Boolean);
@@ -473,16 +502,29 @@ function updateCounts() {
 function layoutCard() {
   const card = currentCard();
   if (!S || !S.cardEl || !card) return;
-  const stage = $("#stage"), sw = stage.clientWidth, sh = stage.clientHeight;
-  const extra = 26 + (card.frames.length > 1 ? 36 : 0) + 2;
-  const r = viewRect(card), aspect = r[2] / r[3];
-  let h = Math.max(60, sh - extra), w = h * aspect;
+  const stage = $("#stage"), main = $(".deckscreen");
+  main.classList.remove("scroll"); stage.style.minHeight = "";
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  const foot = $(".cardfoot", S.cardEl), two = !!card.info && (sw < 400 || card.info.length > 28);
+  foot.classList.toggle("two", two);                 // a long caption gets its own line
+  const extra = (two ? 58 : 26) + (card.frames.length > 1 ? 36 : 0) + (nch(card) > 1 ? 36 : 0) + 2;
+  const r = viewRect(card), grid = S.cview === "side" && nch(card) > 1, aspect = r[2] / r[3];
+  let h = Math.max(60, sh - extra), w = grid ? sw - 2 : h * aspect;
   if (w > sw - 2) { w = sw - 2; h = w / aspect; }
+  if (!grid && w < 0.8 * sw && !S.forceCompact && modeOf(S.rec.deck) === "swipe" && !$("#answers").classList.contains("compact")) {
+    S.forceCompact = true; renderAnswerButtons(); return layoutCard();   // first make room with compact buttons
+  }
+  const minW = Math.min(sw - 2, Math.round(0.75 * sw));
+  if (!grid && w < minW) {                           // still too narrow: keep the width, let the page scroll a little
+    w = minW; h = w / aspect;
+    main.classList.add("scroll"); stage.style.minHeight = `${Math.ceil(h + extra + 4)}px`;
+  }
   w = Math.floor(w); h = Math.floor(h);
   S.cardEl.style.width = `${w + 2}px`;
   const cv = $("canvas", S.cardEl);
   cv.style.width = `${w}px`; cv.style.height = `${h}px`;
-  if (S.view && S.view.sources) S.view.resize(viewRect(card));
+  if (S.view && S.view.loaded) S.view.resize(viewRect(card));
+  fitFrameLabels(S.cardEl);
 }
 
 async function showCard() {
@@ -501,15 +543,16 @@ async function showCard() {
   const el = document.createElement("div");
   el.className = "card enter";
   el.innerHTML = `<canvas></canvas><div class="stamp"></div><span class="zoomhint">tap = zoom</span>
-    ${card.frames.length > 1 ? `<div class="frames">${card.frames.map((f, i) => `<button data-frame="${i}" aria-pressed="${i === 0}">${esc(f.name || i + 1)}</button>`).join("")}<button class="play" data-act="play" aria-label="Play frames">▶</button></div>` : ""}
+    ${nch(card) > 1 ? `<div class="frames chanbar">${chanBar(card, "chan")}</div>` : ""}
+    ${card.frames.length > 1 ? `<div class="frames">${framesBar(card, "frame")}</div>` : ""}
     <div class="cardfoot"><span class="caption" data-act="caption" title="${esc(card.info || "")}">${esc(card.info || "")}</span><button class="note-btn ${S.notes.has(card.id) ? "has" : ""}" data-act="note" aria-label="Note on this card">✎ note</button><span>${esc(card.id)}</span></div>`;
   stage.replaceChildren(el);
   S.cardEl = el;
   attachSwipe(el);
   layoutCard();
   S.view = new CardCanvas($("canvas", el));
-  S.view.display = displayFor(S.key, card);
-  try { await S.view.show(S.rec, card, { hidden: S.hidden }); }
+  S.view.display = displayFor(S.key, card, S.rec.deck);
+  try { await S.view.show(S.rec, card, { hidden: S.hidden, cview: S.cview, chan: S.chan }); }
   catch (e) { console.error(e); toast(`Could not show this card: ${e.message}`, 4000); }
   S.shownAt = performance.now();
   prefetch();
@@ -525,7 +568,7 @@ function prefetch() {
     i = (i + 1) % S.order.length;
     const c = S.cardsById.get(S.order[i]);
     if (!c || S.answers.has(c.id)) continue;
-    c.frames.forEach((f) => frameSource(S.key, f.path).catch(() => {}));
+    framePaths(c, 0).forEach((p) => frameSource(S.key, p).catch(() => {}));   // the next card's channels
     const colors = Object.fromEntries(S.rec.deck.sources.map((s) => [s.name, s.color]));
     c.overlays.filter((o) => o.shape === "mask").forEach((o) => maskLayer(S.key, o.mask, o.value, colors[o.source], o.style === "fill").catch(() => {}));
   }
@@ -611,7 +654,8 @@ function snapBack() {
 // Opens the editor for the current card; resolves the drawing or null (cancelled).
 function drawFor(card, prev, title, note, doneLabel = "Save") {
   stopPlay();
-  return openEditor({ rec: S.rec, card, frame: S.frame, hidden: new Set(S.hidden), initial: prev && prev.mask ? prev : null, title, note, doneLabel });
+  return openEditor({ rec: S.rec, card, frame: S.frame, hidden: new Set(S.hidden), initial: prev && (prev.mask || prev.masks) ? prev : null, title, note, doneLabel,
+    cview: S.cview, chan: S.chan });
 }
 
 async function answer(def, from) {
@@ -626,7 +670,7 @@ async function answer(def, from) {
     if (!drawn) { S.busy = false; return; }   // cancelled: no answer
   } else if (def.then === "point" || def.then === "points") {
     snapBack(); stopPlay();
-    const r = await openTapper({ rec: S.rec, card, frame: S.frame, hidden: new Set(S.hidden), multi: def.then === "points", title: def.label,
+    const r = await openTapper({ rec: S.rec, card, frame: S.frame, hidden: new Set(S.hidden), multi: def.then === "points", title: def.label, cview: S.cview, chan: S.chan,
       note: def.then === "points" ? "tap each point" : "tap the spot", color: def.color });
     if (!r) { S.busy = false; return; }
     extra = { points: r.points };
@@ -705,7 +749,7 @@ async function followCard() {
   S.busy = true;
   const prev = S.answers.get(card.id) || null;
   const pos = S.order.indexOf(card.id) + 1;
-  const r = await openFollow({ rec: S.rec, card, hidden: new Set(S.hidden), title: S.rec.deck.title, note: `card ${pos} of ${S.order.length}` });
+  const r = await openFollow({ rec: S.rec, card, hidden: new Set(S.hidden), title: S.rec.deck.title, note: `card ${pos} of ${S.order.length}`, cview: S.cview, chan: S.chan });
   if (!r) { S.busy = false; S.autoEdit = false; return; }
   if (r.skip) {
     S.busy = false;
@@ -790,14 +834,56 @@ async function undo() {
   showCard();
 }
 
-// --- frames
+// --- time frames and channels
+const nch = (card) => framePaths(card, 0).length;
+function framesBar(card, attr) {               // time frames (or one frame per picture in older decks)
+  return card.frames.map((f, i) => `<button data-${attr}="${i}" aria-pressed="${i === S.frame}" title="${esc(f.name || i + 1)}" data-name="${esc(f.name || i + 1)}">${esc(f.name || i + 1)}</button>`).join("")
+    + `<button class="play" data-act="play" aria-label="Play frames">${playTimer ? "❚❚" : "▶"}</button>`;
+}
+function chanBar(card, attr) {                 // each channel, "Mix" (added up in colour), "Side by side"
+  const chans = channelsOf(S.rec.deck), colors = channelColors(chans);
+  const b = (v, label, on, color) => `<button data-${attr}="${v}" aria-pressed="${on}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
+  return chans.map((c, i) => b(i, c.name || `channel ${i + 1}`, S.cview === "one" && S.chan === i, colors[i])).join("")
+    + b("mix", "Mix", S.cview === "mix") + b("side", "Side by side", S.cview === "side");
+}
+// Frame buttons whose names don't fit fall back to 1, 2, 3, …; a crowded channel bar says "Side" and scrolls.
+function fitFrameLabels(root) {
+  const side = root && $(".chanbar [data-chan=side], .chanbar [data-zchan=side]", root);
+  if (side) { side.textContent = "Side by side"; const bar = side.parentElement; if (bar.scrollWidth > bar.clientWidth + 1) side.textContent = "Side"; }
+  const btns = $$("[data-frame],[data-zframe]", root);
+  btns.forEach((b) => { b.textContent = b.dataset.name; });
+  if (btns.some((b) => b.scrollWidth > b.clientWidth + 1)) btns.forEach((b, i) => { b.textContent = String(i + 1); });
+}
+function refreshBars() {
+  const card = currentCard();
+  if (!card) return;
+  for (const [root, fa, ca] of [[S.cardEl, "frame", "chan"], [Z && Z.el, "zframe", "zchan"]]) {
+    if (!root) continue;
+    $$(`[data-${fa}]`, root).forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset[fa] === S.frame)));
+    const cb = $(".chanbar", root);
+    if (cb) cb.innerHTML = chanBar(card, ca);
+  }
+}
+// Switching the channel keeps the frame; switching the frame keeps the channel (or Mix).
+function setChannel(v) {
+  const card = currentCard();
+  if (!card || !S.view) return;
+  const wasSide = S.cview === "side";
+  if (v === "mix" || v === "side") S.cview = v; else { S.cview = "one"; S.chan = +v; }
+  prefs.set(`chview:${S.key}`, { cview: S.cview, chan: S.chan });
+  const relayout = wasSide !== (S.cview === "side");
+  S.view.setChannels(S.cview, S.chan, relayout ? viewRect(card) : null);
+  if (relayout) layoutCard();
+  if (Z) Z.view.setChannels(S.cview, S.chan, relayout ? viewRect(card) : null);
+  refreshBars();
+}
 function setFrame(i) {
   const card = currentCard();
   if (!card || !S.view) return;
   S.frame = (i + card.frames.length) % card.frames.length;
   S.view.setFrame(S.frame);
-  $$(".frames [data-frame]", S.cardEl).forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.frame === S.frame)));
-  if (Z) Z.view.setFrame(S.frame), $$("[data-zframe]", Z.el).forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.zframe === S.frame)));
+  if (Z) Z.view.setFrame(S.frame);
+  refreshBars();
 }
 let playTimer = null;
 function togglePlay() {
@@ -827,7 +913,7 @@ function toggleAllSources() {
 }
 
 function onDeckClick(e) {
-  const t = e.target.closest("[data-act],[data-val],[data-frame],[data-src]");
+  const t = e.target.closest("[data-act],[data-val],[data-frame],[data-chan],[data-src]");
   if (!t || !S) return;
   if (t.dataset.val !== undefined) {
     const def = S.allDefs.find((d) => d.value === t.dataset.val && d.slot === t.dataset.slot && !d.hidden);
@@ -835,6 +921,7 @@ function onDeckClick(e) {
     return;
   }
   if (t.dataset.frame !== undefined) { stopPlay(); return setFrame(+t.dataset.frame); }
+  if (t.dataset.chan !== undefined) return setChannel(t.dataset.chan);
   if (t.dataset.src !== undefined) return toggleSource(t.dataset.src);
   const act = t.dataset.act;
   if (act === "back") return S.revisit ? history.back() : go("#/");
@@ -884,31 +971,34 @@ async function openZoom() {
       ${deck.sources.filter((s) => !s.guide).map((s) => `<button class="chip" data-zsrc="${esc(s.name)}" aria-pressed="${!S.hidden.has(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}
     </div>
     <canvas></canvas>
-    <div class="bottom">${card.frames.length > 1 ? `<div class="frames" style="border:0;padding:0">${card.frames.map((f, i) => `<button data-zframe="${i}" aria-pressed="${i === S.frame}">${esc(f.name || i + 1)}</button>`).join("")}<button class="play" data-act="play">${playTimer ? "❚❚" : "▶"}</button></div>` : ""}
+    <div class="bottom">${nch(card) > 1 ? `<div class="frames chanbar" style="border:0;padding:0 0 6px">${chanBar(card, "zchan")}</div>` : ""}
+      ${card.frames.length > 1 ? `<div class="frames" style="border:0;padding:0">${framesBar(card, "zframe")}</div>` : ""}
       ${card.info ? `<p class="zoom-info">${esc(card.info)}</p>` : ""}
       <p class="hint" style="margin:6px 0 0">pinch or scroll to zoom · drag to move · double-tap to zoom in</p></div>`;
   document.body.appendChild(el);
   Z = { el, view: new CardCanvas($("canvas", el), { interactive: true }) };
-  Z.view.display = displayFor(S.key, card);
+  Z.view.display = displayFor(S.key, card, S.rec.deck);
   el.onclick = (e) => {
-    const t = e.target.closest("[data-z],[data-zsrc],[data-zframe],[data-act]");
+    const t = e.target.closest("[data-z],[data-zsrc],[data-zframe],[data-zchan],[data-act]");
     if (!t) return;
     if (t.dataset.z === "close") closeZoom();
     else if (t.dataset.act === "contrast") contrastPanel();
     else if (t.dataset.zsrc !== undefined) toggleSource(t.dataset.zsrc);
     else if (t.dataset.zframe !== undefined) { stopPlay(); setFrame(+t.dataset.zframe); }
+    else if (t.dataset.zchan !== undefined) setChannel(t.dataset.zchan);
     else if (t.dataset.act === "play") togglePlay();
   };
   const onR = () => Z && Z.view.resize();
   window.addEventListener("resize", onR);
   Z.off = () => window.removeEventListener("resize", onR);
-  await Z.view.show(S.rec, card, { frame: S.frame, hidden: S.hidden });
+  await Z.view.show(S.rec, card, { frame: S.frame, hidden: S.hidden, cview: S.cview, chan: S.chan });
+  fitFrameLabels(Z.el);
 }
 function contrastPanel() {
   const card = currentCard();
-  if (!card || !S.view || !S.view.sources) return;
-  const src = S.view.sources[S.frame] || S.view.sources[0];
-  openContrast(S.key, card.frames.length > 1 ? card.frames[S.frame].name || "" : "", src.bits === 16);
+  if (!card || !S.view || !S.view.loaded) return;
+  const c = S.view.activeChannel(), src = S.view.source(S.frame, c);
+  openContrast(S.key, contrastName(S.rec.deck, card, S.frame, c), !!src && src.bits === 16);
 }
 function closeZoom() {
   if (!Z) return;
@@ -923,6 +1013,8 @@ function deckMenu() {
       <button class="btn quiet" data-m="review">Review and change answers</button>
       ${modeOf(S.rec.deck) === "swipe" ? `<button class="btn quiet" data-m="edit">Edit the answer buttons</button>` : ""}
       <button class="btn quiet" data-m="export">Export answers</button>
+      <button class="btn quiet" data-m="share">Share this deck</button>
+      <button class="btn quiet" data-m="team">Team folder on Google Drive</button>
       <button class="btn quiet" data-m="settings">Settings & backup</button>
       <button class="btn quiet" data-m="help">Help</button>
       <button class="btn danger" data-m="delete">Delete this deck</button>
@@ -935,6 +1027,8 @@ function deckMenu() {
       review: () => { sh.close(); go(`#/review/${encodeURIComponent(rec.key)}`); },
       results: () => { sh.close(); go(`#/results/${encodeURIComponent(rec.key)}`); },
       settings: () => settingsSheet(),
+      share: () => shareDeckSheet(rec.key),
+      team: () => teamSheet(rec.key),
       edit: () => answerEditor(rec),
       export: () => exportSheet(rec),
       help: () => helpSheet(rec),
@@ -1069,11 +1163,167 @@ ${out.csv}`;
   };
 }
 
+// ---------------------------------------------------------------- sharing, Google Drive, photos
+const mb = (bytes) => (bytes < 1e6 ? `${Math.max(1, Math.round(bytes / 1e3))} KB` : `${(bytes / 1e6).toFixed(1)} MB`);
+const fileSafe = (s) => String(s || "").normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "anonymous";
+const noDrive = `<p class="muted" style="font-size:13px">Google Drive isn't set up for this copy of the app yet (js/config.js).</p>`;
+
+function linkBlock(link) {
+  return `<div class="share-link"><div class="qr">${qrSVG(link)}</div>
+    <input type="text" readonly value="${esc(link)}" aria-label="Deck link">
+    <div class="row"><button class="btn" data-l="copy">Copy link</button>${navigator.share ? `<button class="btn quiet" data-l="share">Share link</button>` : ""}</div>
+    <p class="muted" style="font-size:12px">Anyone who opens the link (or scans the code) gets this deck in Hooman. Their answers stay on their phone until they export them or save them to the team folder.</p></div>`;
+}
+function wireLink(el, link, title) {
+  el.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-l]");
+    if (!t) return;
+    if (t.dataset.l === "copy" && (await copyText(link))) toast("Link copied");
+    if (t.dataset.l === "share") { try { await navigator.share({ title, url: link }); } catch {} }
+  });
+}
+
+async function shareDeckSheet(key) {
+  const rec = await store.getDeck(key);
+  const sh = openSheet(`<h3>Share this deck</h3>
+    <p>Send it as a file: a <span class="mono">.hooman.zip</span> with deck.json and every image (${rec.bytes ? mb(rec.bytes) : "size unknown"}). The other person taps Import, or on Android shares it to Hooman.</p>
+    <div class="stack"><button class="btn" data-s="file">Send as a file</button>
+    ${drive.googleReady() ? `<button class="btn quiet" data-s="drive">Share a link (Google Drive)</button>` : ""}</div>
+    ${drive.googleReady() ? "" : noDrive}
+    <div id="share-out">${rec.sourceURL ? `<div class="section-title">This deck came from a link</div>${linkBlock(deckLink(appURL(), rec.sourceURL))}` : ""}</div>`);
+  if (rec.sourceURL) wireLink($("#share-out", sh.el), deckLink(appURL(), rec.sourceURL), rec.title);
+  sh.el.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-s]");
+    if (!t) return;
+    t.disabled = true;
+    try {
+      const zip = await buildDeckZip(rec);
+      if (t.dataset.s === "file") {
+        const r = await shareOrDownload(zip, `${rec.key}.hooman.zip`);
+        if (r !== "cancelled") toast(r === "shared" ? "Shared" : "Saved to downloads");
+      } else {
+        toast("Uploading to your Google Drive…", 4000);
+        const f = await drive.upload(zip, `${rec.key}.hooman.zip`, { fileId: rec.sharedFileId, folderId: rec.drive && rec.drive.folderId });
+        const view = await drive.makePublic(f.id);
+        rec.sharedFileId = f.id; rec.sourceURL = view; await store.putDeck(rec);
+        const link = deckLink(appURL(), view), out = $("#share-out", sh.el);
+        out.innerHTML = `<div class="section-title">Link to this deck</div>${linkBlock(link)}`;
+        wireLink(out, link, rec.title);
+      }
+    } catch (err) { showErrors([`Sharing failed: ${err.message}`], []); }
+    t.disabled = false;
+  });
+}
+
+async function openFromDrive() {
+  try {
+    const picked = await drive.pick({ title: "Open a deck, backup or answers file" });
+    if (!picked.length) return;
+    toast("Downloading from Google Drive…", 4000);
+    importFile(await drive.download(picked[0].id, picked[0].name));
+  } catch (e) { showErrors([e.message], []); }
+}
+
+async function teamSheet(key) {
+  const rec = await store.getDeck(key);
+  const d = rec.drive || {};
+  const sh = openSheet(`<h3>Team folder on Google Drive</h3>
+    <p>One shared Drive folder for the whole team: put the deck in it, everyone saves their answers back to it, and <b>Results</b> compares everyone.</p>
+    ${drive.googleReady() ? `<p>Folder: <b style="color:var(--text)">${d.folderName ? esc(d.folderName) : "none chosen yet"}</b></p>
+    <div class="stack"><button class="btn ${d.folderId ? "quiet" : ""}" data-t="choose">${d.folderId ? "Choose another folder" : "Choose the folder"}</button>
+      <button class="btn" data-t="answers" ${d.folderId ? "" : "disabled"}>Save my answers to the folder</button>
+      <button class="btn quiet" data-t="deck" ${d.folderId ? "" : "disabled"}>Put this deck in the folder</button>
+      <button class="btn quiet" data-t="results">Compare with the team (Results)</button></div>
+    <p class="muted" style="font-size:12px">Your answers are saved as <span class="mono">${esc(rec.key)}.${esc(fileSafe(annotator()))}.answers.zip</span>; set your name in Settings first. Teammates open the deck with "Open from Google Drive".</p>` : noDrive}`);
+  sh.el.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-t]");
+    if (!t) return;
+    const a = t.dataset.t, d = rec.drive || {};          // read fresh: an earlier save stored the file ids
+    if (a === "results") { sh.close(); return go(`#/results/${encodeURIComponent(key)}`); }
+    t.disabled = true;
+    try {
+      if (a === "choose") {
+        const [f] = await drive.pick({ kind: "folder", title: "Pick the team's folder" });
+        if (f) { rec.drive = { folderId: f.id, folderName: f.name }; await store.putDeck(rec); toast(`Team folder: ${f.name}`); teamSheet(key); return; }
+      } else if (a === "answers") {
+        const out = await buildExport(rec);
+        const name = `${rec.key}.${fileSafe(annotator())}.answers.zip`;
+        const f = await drive.upload(out.zip, name, { folderId: d.folderId, fileId: d.answersFileId });
+        rec.drive = { ...d, answersFileId: f.id }; rec.exportedAt = new Date().toISOString(); await store.putDeck(rec);
+        toast(`Saved ${out.count} answers to Drive as ${name}`, 3500);
+      } else if (a === "deck") {
+        const f = await drive.upload(await buildDeckZip(rec), `${rec.key}.hooman.zip`, { folderId: d.folderId, fileId: d.deckFileId });
+        rec.drive = { ...d, deckFileId: f.id }; await store.putDeck(rec);
+        toast("The deck is in the team folder", 3000);
+      }
+    } catch (err) { showErrors([err.message], []); }
+    t.disabled = false;
+  });
+}
+
+// Results: pick teammates' answer files from the team folder.
+async function loadTeam(rec) {
+  const raw = await store.getDeck(rec.key);
+  const picked = await drive.pick({ multi: true, parent: raw.drive && raw.drive.folderId, title: "Pick your team's answers files" });
+  const me = `${rec.key}.${fileSafe(annotator())}.answers.zip`, team = [];
+  for (const p of picked) {
+    if (p.name === me) continue;
+    const x = await readAnswers(await drive.download(p.id, p.name));
+    const answers = x.answers || (x.decks && x.decks.get(rec.key));
+    if (answers && (!x.deck || x.deck === rec.key)) team.push({ who: x.who !== "the other file" ? x.who : p.name.replace(/\.answers\.zip$/, ""), answers });
+  }
+  if (!team.length) toast("None of those files has answers for this deck", 3000);
+  return team;
+}
+
+function photosSheet() {
+  const sh = openSheet(`<h3>📷 New deck from photos</h3>
+    <p>Pick photos from this phone (the picker also shows Google Drive). Big photos are shrunk to 2048 px. No AI needed.</p>
+    <input type="file" id="ph-files" accept="image/*" multiple hidden>
+    <div class="row"><button class="btn quiet" data-p="pick">Choose photos</button><span class="muted" id="ph-count" style="align-self:center">none yet</span></div>
+    <label class="field">Title<input type="text" id="ph-title" value="My photos" maxlength="80"></label>
+    <div class="field">What to do <span class="seg"><button data-pm="swipe" aria-pressed="true">Answer a question</button><button data-pm="annotate" aria-pressed="false">Draw masks</button></span></div>
+    <div id="ph-swipe"><label class="field">Question<input type="text" id="ph-q" value="Is this right?" maxlength="200"></label>
+      <div class="field">Answers<div class="ph-ans"><span>→</span><input type="text" id="ph-r" value="Yes"><span>←</span><input type="text" id="ph-l" value="No"><span>↑</span><input type="text" id="ph-u" value="Unsure"></div></div></div>
+    <div id="ph-annotate" hidden><label class="field">Classes <span class="muted">(optional, comma separated)</span><input type="text" id="ph-classes" placeholder="cell, debris"></label></div>
+    <div class="stack"><button class="btn" data-p="go" disabled>Make the deck</button></div>`);
+  const fin = $("#ph-files", sh.el);
+  let files = [], mode = "swipe";
+  fin.addEventListener("change", () => {
+    files = [...fin.files];
+    $("#ph-count", sh.el).textContent = files.length ? `${files.length} photo${files.length > 1 ? "s" : ""}` : "none yet";
+    sh.el.querySelector("[data-p=go]").disabled = !files.length;
+  });
+  sh.el.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-p],[data-pm]");
+    if (!t) return;
+    if (t.dataset.pm) {
+      mode = t.dataset.pm;
+      $$("[data-pm]", sh.el).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.pm === mode)));
+      $("#ph-swipe", sh.el).hidden = mode !== "swipe"; $("#ph-annotate", sh.el).hidden = mode !== "annotate";
+      return;
+    }
+    if (t.dataset.p === "pick") return fin.click();
+    if (t.dataset.p !== "go" || !files.length) return;
+    t.disabled = true; t.textContent = "Making the deck…";
+    const v = (id) => $(id, sh.el).value.trim();
+    try {
+      const imported = await buildPhotoDeck(files, {
+        title: v("#ph-title"), mode, question: v("#ph-q"),
+        answers: { right: v("#ph-r"), left: v("#ph-l"), up: v("#ph-u") },
+        classes: v("#ph-classes").split(",").map((x) => x.trim()).filter(Boolean),
+      }, (i, n) => { t.textContent = `Preparing photo ${i + 1} of ${n}…`; });
+      sh.close();
+      finishImport(imported, "new");
+    } catch (err) { t.disabled = false; t.textContent = "Make the deck"; showErrors(err.errors || [err.message], []); }
+  });
+}
+
 // ---------------------------------------------------------------- review screen
 async function thumbURL(key, card) {
   const blob = await store.getFile(key, card.frames[0].path);
   if (!blob) return null;
-  const params = displayFor(key, card)(0), head = new Uint8Array(await blob.slice(0, 26).arrayBuffer());
+  const params = displayFor(key, card, (await store.getDeck(key)).deck)(0, 0), head = new Uint8Array(await blob.slice(0, 26).arrayBuffer());
   const is16 = head[0] === 137 && head[24] === 16;
   if (!params && !is16) return URL.createObjectURL(blob);
   const src = await frameSource(key, card.frames[0].path), img = rendered(src, params);
@@ -1086,7 +1336,9 @@ async function thumbURL(key, card) {
 async function openResults(key) {
   const rec = themed(await store.getDeck(key));
   if (!rec) return go("#/");
-  await renderResults(app, rec, { go, toast, copyText, openCard: (card) => go(`#/deck/${encodeURIComponent(key)}?card=${encodeURIComponent(card)}&from=review`) });
+  await renderResults(app, rec, { go, toast, copyText, openCard: (card) => go(`#/deck/${encodeURIComponent(key)}?card=${encodeURIComponent(card)}&from=review`),
+    pickTeam: drive.googleReady() ? () => loadTeam(rec) : null });
+  drive.warmUp();
   cleanup.push(() => { app.onclick = null; });
 }
 

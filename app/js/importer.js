@@ -5,6 +5,8 @@ import { readZip, mimeOf, ZipError } from "./zip.js";
 import { imageSize } from "./png.js";
 import { normalizeDeck } from "./deck.js";
 import * as store from "./store.js";
+import { driveFileId } from "./share.js";
+import { googleReady, downloadPublic } from "./drive.js";
 
 const isURL = (p) => /^https?:\/\//i.test(p);
 const q = (s) => JSON.stringify(s);
@@ -75,6 +77,10 @@ async function load(source, rawText, onProgress) {
     card.frames.forEach((f, j) => {
       const s = sizes.get(f.path);
       if (j && (s.w !== s0.w || s.h !== s0.h)) errs.push(`${where}: frames[${j}] ${q(f.path)} is ${s.w}×${s.h} but frames[0] is ${s0.w}×${s0.h}; all frames must be the same size`);
+      (f.channels || []).slice(1).forEach((p, k) => {
+        const sc = sizes.get(p);
+        if (sc && (sc.w !== s.w || sc.h !== s.h)) errs.push(`${where}${card.frames.length > 1 ? ` frames[${j}]` : ""}: channel image ${q(p)} is ${sc.w}×${sc.h} but its "image" is ${s.w}×${s.h}; every channel must be the same size`);
+      });
     });
     const out = (x, y) => x < -0.05 * s0.w || y < -0.05 * s0.h || x > 1.05 * s0.w || y > 1.05 * s0.h;
     card.overlays.forEach((o, j) => {
@@ -158,12 +164,19 @@ export async function importBlob(file, onProgress) {
 }
 
 export async function importURL(url, onProgress) {
+  const fid = driveFileId(url);
+  if (fid) {                                   // Google Drive doesn't let other sites download its links directly
+    if (!googleReady()) throw new ImportError(["Google Drive links can't be opened by this copy of the app. Download the file from Drive, then tap Import (Drive also shows up in the phone's file picker)."]);
+    let file;
+    try { file = await downloadPublic(fid); } catch (e) { throw new ImportError([e.message]); }
+    return Object.assign(await importBlob(file, onProgress), { sourceURL: url });
+  }
   let blob;
   try { blob = await fetchBlob(url); } catch (e) { throw new ImportError([e.message]); }
   const name = decodeURIComponent(new URL(url).pathname.split("/").pop() || "deck");
   const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
-  if (head[0] === 0x50 && head[1] === 0x4b) return importBlob(new File([blob], name), onProgress);
-  return load(webSource(url, name), await blob.text(), onProgress);
+  if (head[0] === 0x50 && head[1] === 0x4b) return Object.assign(await importBlob(new File([blob], name), onProgress), { sourceURL: url });
+  return Object.assign(await load(webSource(url, name), await blob.text(), onProgress), { sourceURL: url });
 }
 
 // Shuffled decks keep one order for good, so the hooman's place never jumps.
@@ -189,6 +202,8 @@ export async function saveDeck(imported, mode, existing) {
   await store.putFiles(deck.id, [...blobs].map(([path, blob]) => ({ path, blob })));
   const rec = {
     key: deck.id, deck, title: deck.title, origin, bytes: imported.bytes,
+    sourceURL: imported.sourceURL || (mode === "update" && existing ? existing.sourceURL : undefined),
+    drive: mode === "update" && existing ? existing.drive : undefined,
     importedAt: mode === "update" && existing ? existing.importedAt : now, updatedAt: now,
     custom: mode === "update" && existing ? existing.custom : undefined,
     order: mode === "update" && existing && existing.order && deck.shuffle ? mergeOrder(existing.order, deck) : makeOrder(deck),

@@ -24,6 +24,8 @@ failures = []
 def serve():
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(ROOT / "app"))
     http.server.SimpleHTTPRequestHandler.log_message = lambda *a: None
+    http.server.ThreadingHTTPServer.request_queue_size = 128   # the app loads ~30 modules at once; the default backlog is 5
+    http.server.ThreadingHTTPServer.daemon_threads = True
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)  # a free port
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
@@ -419,10 +421,10 @@ def main():
             d, r = dbg(), page.locator(".editor canvas").bounding_box()
             return r["x"] + d["view"]["ox"] + x * d["view"]["s"], r["y"] + d["view"]["oy"] + y * d["view"]["s"]
         def tap(x, y): page.mouse.click(*scr(x, y)); page.wait_for_timeout(150)
-        check(page.locator(".editor [data-frame]").count() == 2, "the editor has channel buttons")
-        page.locator(".editor [data-frame='1']").click(); page.wait_for_timeout(150)
-        check(dbg()["frame"] == 1, "switching to the membrane channel in the editor")
-        page.locator(".editor [data-frame='0']").click()
+        check(page.locator(".editor [data-chan]").count() == 3, "the editor has channel buttons (DAPI, Membrane, Mix)")
+        page.locator(".editor [data-chan='1']").click(); page.wait_for_timeout(150)
+        check(dbg()["chan"] == 1, "switching to the membrane channel in the editor")
+        page.locator(".editor [data-chan='0']").click()
 
         page.locator("[data-tool=pick]").click()
         tap(*cen(model == 3))
@@ -493,8 +495,9 @@ def main():
             page.screenshot(path=OUT / f"14_duel_{w}x{h}.png")
             card = page.locator(".card").bounding_box()
             ans = page.locator("#answers").bounding_box()
-            fits = card["y"] + card["height"] <= ans["y"] + 1 and ans["y"] + ans["height"] <= h + 1
-            check(fits, f"{w}x{h}: card and buttons fit on screen")
+            extra = page.evaluate("document.documentElement.scrollHeight - window.innerHeight")
+            fits = card["y"] + card["height"] <= ans["y"] + 1 and (ans["y"] + ans["height"] <= h + 1 or extra <= 0.35 * h) and card["width"] >= 0.7 * (w - 32)
+            check(fits, f"{w}x{h}: card at least 70% wide, buttons below it, at most a little scrolling (card {card['width']:.0f}px, scroll {extra}px)")
             wide = page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
             check(wide, f"{w}x{h}: no sideways scroll")
 

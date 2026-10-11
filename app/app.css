@@ -76,6 +76,9 @@ button { cursor: pointer; }
 @keyframes enter { from { transform: scale(.94); opacity: .4; } }
 .cardfoot { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 5px 10px 6px; border-top: 1px solid var(--line); height: 26px; white-space: nowrap; }
 .cardfoot span { overflow: hidden; text-overflow: ellipsis; }
+.cardfoot.two { flex-wrap: wrap; height: 58px; row-gap: 2px; align-content: center; }
+.cardfoot.two .caption { flex: 1 0 100%; white-space: normal; line-height: 14px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cardfoot.two > span:last-child { margin-left: auto; }
 .cardfoot .caption { cursor: pointer; flex: 1; min-width: 0; }
 .cardfoot > span:last-child { flex: none; max-width: 45%; }
 .question { cursor: pointer; }
@@ -84,6 +87,12 @@ button { cursor: pointer; }
 .frames button { flex: 1; min-width: 0; height: 28px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 500 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .frames button[aria-pressed="true"] { border-color: var(--focus); color: var(--focus); }
 .frames .play { flex: none; width: 36px; color: var(--text); font-size: 12px; }
+.frames.chanbar { overflow-x: auto; scrollbar-width: none; }
+.frames.chanbar::-webkit-scrollbar { display: none; }
+.frames.chanbar button { flex: 1 0 auto; overflow: visible; text-overflow: clip; padding: 0 8px; }
+.chipset { display: inline-flex; gap: 6px; flex: none; }
+.frames button i, .chip.frame i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; background: currentColor; vertical-align: 1px; }
+.frames button[aria-pressed="false"] { opacity: .55; }
 .stamp { position: absolute; top: 14px; left: 50%; translate: -50% 0; padding: 4px 12px; border: 3px solid; border-radius: 10px; font: 800 clamp(18px, 6vw, 26px) var(--ui);
          text-transform: uppercase; letter-spacing: .04em; background: rgba(0,0,0,.55); opacity: 0; pointer-events: none; white-space: nowrap; max-width: 90%; overflow: hidden; text-overflow: ellipsis; }
 .zoomhint { position: absolute; right: 8px; top: 8px; font: 500 10px var(--mono); color: var(--focus); background: rgba(0,0,0,.6); padding: 1px 6px; border-radius: 3px; pointer-events: none; }
@@ -101,6 +110,17 @@ button { cursor: pointer; }
 .done .big-emoji { font-size: 54px; }
 .done h3 { margin: 0; font-size: 20px; }
 .notice { border: 1px solid var(--yellow); color: var(--yellow); border-radius: 12px; padding: 12px; font-size: 14px; line-height: 1.45; }
+/* many answers: compact buttons, one-line tally, two-line question */
+.answers.compact { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+.answers.compact .ans { height: 42px; border-radius: 12px; font-size: clamp(11px, 3.1vw, 13px); padding: 0 4px; gap: 3px; }
+.answers.compact .ans.undo { height: 32px; }
+.deckscreen.compact .tally { flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.deckscreen.compact .tally::-webkit-scrollbar { display: none; }
+.deckscreen.compact .question { -webkit-line-clamp: 2; }
+.deckscreen.compact .hint { display: none; }
+.deckscreen.scroll { height: auto; min-height: 100dvh; overflow: visible; }
+.deckscreen.scroll .stage { flex: none; }
+.frames button { min-width: 0; }
 @media (max-height: 700px) {
   .ans { height: 46px; border-radius: 12px; }
   .hint { display: none; }
@@ -232,6 +252,16 @@ details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-
 .guide { color: var(--muted); font-size: 14px; line-height: 1.6; padding-left: 18px; margin: 8px 0; }
 .guide b { color: var(--text); }
 .editor .tools.t4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+/* ---------- sharing, photos ---------- */
+.share-link { display: grid; gap: 10px; justify-items: center; margin-top: 8px; }
+.share-link .qr { background: #fff; border-radius: 12px; padding: 8px; line-height: 0; }
+.share-link .qr svg { width: 220px; height: 220px; }
+.share-link input { width: 100%; font: 12px var(--mono); }
+.share-link .row { width: 100%; }
+.ph-ans { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; }
+.ph-ans span { color: var(--muted); text-align: center; }
+.sheet input[type=text] { min-width: 0; }
 
 /* ---------- results ---------- */
 .results .r-sub { margin: 0 0 6px; }
