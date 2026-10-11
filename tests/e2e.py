@@ -49,13 +49,22 @@ def png1(w=8, h=8):
     b = io.BytesIO(); Image.new("L", (w, h)).save(b, "PNG"); return b.getvalue()
 
 
-def import_example(page, title):
+def import_example(page, title, wait_card=True):
     page.get_by_role("button", name="Try an example").click()
     page.locator(".example", has_text=title).click()
     expect(page.locator(".sheet h3")).to_contain_text("Ready", timeout=20000)
     page.get_by_role("button", name="Open the deck").click()
-    page.wait_for_selector(".card canvas")
+    if wait_card:
+        page.wait_for_selector(".card canvas")
     page.wait_for_timeout(400)
+    dismiss_tour(page)
+
+
+def dismiss_tour(page, name="Tester"):
+    if page.locator(".sheet h3", has_text="Welcome").count():
+        page.locator("#tour-name").fill(name)
+        page.get_by_role("button", name="Let's go").click()
+        page.wait_for_timeout(150)
 
 
 def count(page):
@@ -214,7 +223,8 @@ def main():
                 m = np.asarray(Image.open(io.BytesIO(z.read(mpath))))
             check(m.shape == (384, 384) and len(np.unique(m)) - 1 == len(bw["objects"]) >= 2,
                   f"mask is a 384x384 label image with {len(bw['objects'])} objects (found {len(np.unique(m)) - 1})")
-        check(csv.splitlines()[0] == "card_id,image,answer,label,answered_at,ms,changes,mask", "csv header")
+        check(csv.splitlines()[0] == "card_id,image,answer,label,answered_at,ms,changes,mask,annotator,note,number,text,points", "csv header")
+        check(data.get("annotator") == "Tester" and all(a.get("by") == "Tester" for a in data["answers"]), "the tour's name goes into every answer")
         changed = [a for a in data["answers"] if a["changes"] > 0]
         check(len(changed) == 1 and changed[0]["answer"] == "B", "the changed answer has changes=1")
         page.keyboard.press("Escape")

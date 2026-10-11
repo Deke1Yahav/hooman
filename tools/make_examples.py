@@ -175,7 +175,7 @@ def duel_deck():
         "question": "Which model outlined the marked cell right?",
         "help": "Red outlines are model A, green outlines are model B. The yellow ring marks the cell this card is about. Tap the chips to hide one model.",
         "sources": {"A": {"label": "Model A", "color": "#ff5d6c"}, "B": {"label": "Model B", "color": "#3ddc97"},
-                    "this cell": {"label": "This cell", "color": "#f2c14e"}},
+                    "this cell": {"label": "This cell", "color": "#f2c14e", "guide": True}},
         "answers": {"left": {"label": "A is right", "value": "A"}, "right": {"label": "B is right", "value": "B"},
                     "up": {"label": "Both wrong", "value": "both_wrong", "then": "draw"}, "down": "Unsure"},
         "buttons": [{"label": "Not a cell", "value": "not_a_cell"}],
@@ -273,7 +273,11 @@ def timelapse_deck():
         "question": "Does the tracker stay on the same cell in all 3 frames?",
         "help": "Use the frame buttons under the image, or ▶ to play. The ring is where the tracker thinks the cell is.",
         "sources": {"tracker": {"label": "Tracker", "color": "#f2c14e"}, "segmentation": {"label": "Cells", "color": "#4fc3f7"}},
-        "answers": {"right": "Same cell", "left": "It jumps", "up": "Unsure"},
+        "frames_are": "time",
+        "answers": {"right": {"label": "Same cell", "value": "same", "celebrate": True},
+                    "left": {"label": "It jumps: tap the right cell", "value": "jumps", "then": "point"},
+                    "up": "Unsure"},
+        "buttons": [{"label": "Divides: tap both daughters", "value": "divides", "then": "points"}],
         "cards": cards,
     }
     write_deck("timelapse.hooman.zip", deck, files)
@@ -326,6 +330,50 @@ def fruit_deck():
         "cards": cards,
     }
     write_deck("fruit.hooman.zip", deck, files)
+
+
+# ---------------------------------------------------------------- 7. follow mode: manual tracking
+def follow_deck():
+    files, cards = {}, []
+    S, T = 256, 6
+    r = np.random.default_rng(900)
+    yy, xx = np.mgrid[0:S, 0:S]
+    pos = [np.array(p) for p in [(70.0, 80.0), (170.0, 70.0), (120.0, 180.0), (200.0, 190.0)]]
+    vel = [np.array(v) for v in [(9.0, 4.0), (-5.0, 8.0), (6.0, -7.0), (-8.0, -3.0)]]
+    tracks = {k: [] for k in range(len(pos))}
+    daughters = []
+    for t in range(T):
+        lab = np.zeros((S, S), np.uint8)
+        cells = []
+        for k in range(len(pos)):
+            c = pos[k] + vel[k] * t
+            if k == 0 and t >= 4:                     # cell 0 divides between frames 3 and 4
+                off = np.array([0.0, 11.0 + 4 * (t - 4)])
+                cells += [(c - off, 10, 8, 10 + k), (c + off, 10, 8, 20 + k)]
+                if t == 4: daughters = [c - off, c + off]
+            else:
+                cells.append((c, 15, 11, k + 1))
+            tracks[k].append(c.copy())
+        for (c, a, b, v) in cells:
+            lab[((xx - c[0]) / a) ** 2 + ((yy - c[1]) / b) ** 2 <= 1] = v
+        img = np.where(lab > 0, 0.72, 0.1) + 0.05 * r.standard_normal((S, S))
+        img = np.asarray(Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5)))
+        files[f"t/{t:03d}.png"] = png_bytes(img)
+        files[f"seg/{t:03d}.png"] = png_bytes(lab)
+    frames = [{"image": f"t/{t:03d}.png", "name": f"t{t}"} for t in range(T)]
+    overlays = [{"source": "seg", "mask": f"seg/{t:03d}.png", "frame": t} for t in range(T)]
+    for k in range(3):
+        x, y = tracks[k][0]
+        cards.append({"id": f"cell{k + 1}", "start": [round(float(x), 1), round(float(y), 1), 0], "frames": frames, "overlays": overlays,
+                      "info": f"cell {k + 1}" + (" (watch it divide)" if k == 0 else "")})
+    deck = {
+        "hooman": 1, "id": "example-follow", "mode": "follow", "title": "Example · Follow the cells",
+        "question": "Tap the same cell in every frame",
+        "help": "The ring shows where the cell was. Tap it in the next frame; the app moves on by itself. Hold the image to see the previous frame. Cell 1 divides: press Divides, then tap both daughters.",
+        "sources": {"seg": {"label": "Segmentation", "color": "#4fc3f7"}},
+        "cards": cards,
+    }
+    write_deck("follow.hooman.zip", deck, files)
 
 
 # ---------------------------------------------------------------- 6. raw 16-bit microscopy, 2 channels
@@ -383,6 +431,7 @@ def nuclei_deck():
 
 
 if __name__ == "__main__":
+    follow_deck()
     nuclei_deck()
     fruit_deck()
     shapes_deck()
@@ -396,6 +445,7 @@ if __name__ == "__main__":
         {"file": "timelapse.hooman.zip", "title": "Follow a track", "about": "Three frames per card: does the tracker stay on one cell?"},
         {"file": "fruit.hooman.zip", "title": "Mask the fruit", "about": "No question: draw masks with classes (apple, orange, leaf). Shows the mask editor."},
         {"file": "nuclei.hooman.zip", "title": "Fix the nuclei (16-bit)", "about": "Raw 16-bit microscopy, 2 channels, auto contrast. Fix a model's merged, split and missed nuclei."},
+        {"file": "follow.hooman.zip", "title": "Follow the cells", "about": "Manual tracking: tap the same cell frame after frame. One cell divides."},
     ]
     (OUT / "index.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
     print("index.json written")

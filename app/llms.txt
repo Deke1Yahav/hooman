@@ -45,6 +45,14 @@ Rules for the zip:
 - Keep the long side of each image at 2048 px or less. Phones are slow with bigger images.
 - Any path may instead be an `https://` URL. The app downloads it once at import, so the host must allow cross-origin requests (GitHub raw and gists do).
 
+## 1b. Size budget
+
+- Keep one deck under about **50 MB and 1000 cards**. Phones handle up to about 100 MB, and the app checks free storage before saving.
+- **Reuse images.** Many cards may point at the same image path (one card per object with `focus`). The file is stored once.
+- Use JPEG (quality about 85) for photos. Use PNG for microscopy and masks, 8-bit when there are fewer than 256 objects. Keep the long side at 2048 px or less.
+- **Split bigger sets into parts.** Use one deck per part with its own `id` (`cells-part1`, `cells-part2`, …) and title (`Cells (1/3)`). Card IDs stay unique across parts, so the answers join back together.
+- Text fits the phone: a card's `info` shows on one line (about **40 characters**), and the `question` on up to 3 lines (about **120 characters**). The hooman can tap either to read it in full.
+
 ## 2. deck.json
 
 | field | type | meaning |
@@ -59,6 +67,8 @@ Rules for the zip:
 | `sources` | object | Who made each overlay, and its colour (section 4) |
 | `classes` | list | Object classes for the mask editor (section 5) |
 | `shuffle` | bool | Show the cards in random order (default `false`) |
+| `mode` | text | `"swipe"` (the default when there is a `question`), `"annotate"` (the default without one, section 5) or `"follow"` (manual tracking, section 5b) |
+| `frames_are` | text | `"channels"` (default) or `"time"`. With `"time"`, the mask editor keeps one mask per frame, and an object's number is the same cell in every frame (a track). Follow decks are always `"time"`. |
 | `cards` | list | **required**: the cards (section 4) |
 
 ## 3. Answers
@@ -76,7 +86,12 @@ Rules for the zip:
 
 - `label` is what the button and swipe stamp show.
 - `value` is what gets saved. The default is the label in lowercase, with spaces turned into `_`.
-- `then: "draw"` opens the mask editor after this answer. The saved answer includes the hooman's mask, and the editor can start from any overlay's mask.
+- `then` asks for more after this answer. The answer is only saved when the hooman finishes that step.
+  - `"draw"` opens the mask editor. The saved answer includes the hooman's mask, and the editor can start from any overlay's mask.
+  - `"point"`: tap one spot, such as "where does the cell really go?"
+  - `"points"`: tap several spots, such as "tap both daughters".
+  - Each tapped point is saved with `x`, `y`, `frame`, and `hits`: the mask objects under the tap (`source` and label `value`), so it links straight to your segmentation's IDs.
+  - `"number"` asks for a number (for example "count the cells"), and `"text"` asks for a few words.
 - `color` sets a CSS colour. By default, an answer whose `value` equals a source name takes that source's colour, so the "A" button is the same colour as A's outlines.
 - `celebrate: true` fires a confetti blast when the hooman picks this answer, a little dopamine for the answer you hope to see (such as "model is right"). The hooman can also switch it on in the app.
 
@@ -100,6 +115,7 @@ A card is an image path string, or an object:
 | `question` | string | Replaces the deck question for this card |
 | `info` | string | A small caption under the image (scores, metadata) |
 | `focus` | `[x, y, w, h]` | The card opens zoomed to this box, so one object of a big image can be its own card without cropping |
+| `start` | `[x, y]` or `[x, y, frame]` | Follow decks: the cell to follow, in pixels of that frame (default frame 0). Without it, the hooman's first tap picks the cell. |
 | `overlays` | list | What a model or algorithm found on this image |
 
 Coordinates are **pixels of the full-size image**: origin at the top-left, x to the right, y down.
@@ -120,7 +136,7 @@ and these optional fields:
 | `source` | Who made it (a model name). Default: `"model"`. Each source keeps one colour everywhere and can be shown or hidden. |
 | `label` | Short text drawn next to the shape, for example `"cat 0.83"` |
 | `value` | Masks only: show just the object with this label value |
-| `style` | `"outline"` (default) or `"fill"` |
+| `style` | `"outline"` (default), `"fill"` or `"bold"` (a thick outline, to make one object stand out) |
 | `frame` | With `frames`: the 0-based frame this overlay belongs to. Default: all frames. |
 
 **Label image (mask)** rules:
@@ -138,6 +154,24 @@ and these optional fields:
 ```
 
 Without `sources`, colours are assigned in order of first appearance: red, green, blue, yellow, purple and pink.
+
+**Guides.** A source with `"guide": true` is drawn, dashed and white by default, but it is not a model:
+- it gets no on/off chip
+- it is not offered as "Start from"
+- it is not hit by taps
+
+Use it for a "where to look" box or ring:
+
+```json
+"sources": {"convnext": {"label": "ConvNeXt"}, "look": {"guide": true}},
+"cards": [{"image": "f.png", "overlays": [{"source": "look", "box": [100, 80, 60, 60]}, {"source": "convnext", "mask": "m.png"}]}]
+```
+
+**Make one object stand out.** Use `"style": "bold"` for a thick outline. To show all of a model's outlines thin and the object in question thick, add the mask twice:
+
+```json
+"overlays": [{"source": "convnext", "mask": "m.png"}, {"source": "convnext", "mask": "m.png", "value": 17, "style": "bold"}]
+```
 
 ## 5. Annotate mode and the mask editor
 
@@ -160,11 +194,29 @@ An annotate deck looks like this:
 - On a card with `focus`, a mask contributes only the object(s) that fill the focus box.
 - The saved answer is `"annotated"`, or `"empty"` when nothing was drawn.
 
+## 5b. Follow mode (manual tracking)
+
+With `"mode": "follow"`, every card is a time-lapse (`frames`, two or more) and one cell to follow (`start`).
+- The app shows the next frame. The hooman taps the same cell, and the app moves on to the next frame by itself.
+- The hooman can hold the image to see the previous frame.
+- Buttons: **Not here** (the cell is missing in this frame), **Divides** (then tap both daughters), **Cell ends**, **Leaves view**.
+- The answer is how the track ended: `"last_frame"`, `"ends"`, `"divides"` or `"leaves"`.
+- `points` holds the track: one entry per frame, `{"frame", "x", "y", "hits"}`. A missing frame is `{"frame", "missing": true}`, and the daughters carry `"daughter": 1 | 2`.
+
+```json
+{"hooman": 1, "id": "follow-v1", "mode": "follow", "title": "Follow these cells",
+ "sources": {"seg": {"label": "Segmentation"}},
+ "cards": [{"id": "track7", "start": [120.5, 88, 0],
+            "frames": ["t/000.png", "t/001.png", "t/002.png", "t/003.png"],
+            "overlays": [{"source": "seg", "mask": "seg/000.png", "frame": 0}, {"source": "seg", "mask": "seg/001.png", "frame": 1},
+                         {"source": "seg", "mask": "seg/002.png", "frame": 2}, {"source": "seg", "mask": "seg/003.png", "frame": 3}]}]}
+```
+
 ## 6. What comes back
 
 In the app, the hooman taps **Export**. They get `<deck id>.answers.zip`, which contains:
 
-- `answers.csv`, one row per card. Columns: `card_id, image, answer, label, answered_at, ms, changes, mask`.
+- `answers.csv`, one row per card. Columns: `card_id, image, answer, label, answered_at, ms, changes, mask, annotator, note, number, text, points`. `points` is JSON.
   - `ms` is the time spent on the card.
   - `changes` counts how many times the answer was changed.
 - `answers.json`, which holds the same data and the full history:
@@ -172,9 +224,10 @@ In the app, the hooman taps **Export**. They get `<deck id>.answers.zip`, which 
 ```json
 {"hooman_answers": 1,
  "deck": {"id": "duel-v1", "title": "Model duel", "question": "Which model got it right?"},
+ "annotator": "Dekel",
  "exported_at": "2026-10-11T18:00:00Z",
  "answers": [{"card": "001", "image": "img/001.png", "answer": "both_wrong", "label": "Both wrong",
-              "at": "2026-10-11T17:59:01Z", "ms": 4200, "changes": 0,
+              "at": "2026-10-11T17:59:01Z", "ms": 4200, "changes": 0, "by": "Dekel", "note": "two cells touching",
               "overlays": [{"source": "hooman", "mask": "masks/001.png"}],
               "objects": [{"value": 1, "class": "leaf"}, {"value": 2}]}],
  "unanswered": ["002"],
@@ -182,8 +235,16 @@ In the app, the hooman taps **Export**. They get `<deck id>.answers.zip`, which 
 ```
 
 - `masks/<card id>.png` holds the hooman's masks, in the same label-image format as the input. A `/` in a card ID becomes `__` in the file name.
-- `objects` lists each label value in that mask, with its class when the deck has `classes`.
+- `objects` lists each label value in that mask, with its class when the deck has `classes`. It also says where the object came from and what the hooman did to it:
+  - `from`: the model it started from, when the hooman used "Start from" or "Pick"
+  - `from_values`: that model's object numbers, so two numbers merged into one object means "the model was right but in pieces"
+  - `edits`: the tools used on it, such as `"merge"`, `"cut"`, `"brush"`, `"erase"`, `"wand"`, `"contour"`, `"polygon"` or `"fill"`. An object with `from` and no `edits` was the model's object, taken as it was.
+- `from` on the answer lists every model the drawing started from.
 - `frame` (cards with `frames`) is the frame that was on screen when the drawing started.
+- With `"frames_are": "time"`, `overlays` has one mask per frame, `{"source": "hooman", "mask": "masks/<id>_f2.png", "frame": 2, "objects": [...]}`. The same label value in different frames is the same cell.
+- `points` (tap and follow answers), `end` (follow), `number`, `text` and `note` appear when they were given. `by` is the annotator's name, if they set one.
+- The hooman can restore an `.answers.zip` (or a full backup) into the app on any device to continue the work. Newer answers win.
+- For small decks, the hooman can also tap **Copy for the AI** on the export screen and paste the answers as CSV text (no masks) straight into the chat.
 
 Join the results back to your data on `card` (the card ID).
 
@@ -243,6 +304,10 @@ Image.fromarray((a * 255).astype(np.uint8)).save("x.png")
 - Use `frames` for t-1, t and t+1.
 - Use the `man_seg*.tif` / `mask*.tif` label images as masks, converted to 16-bit PNG.
 - Use `frame` on each overlay.
+
+- To ask "is this link right?", put t and t+1 in `frames` and use an answer such as `{"label": "Wrong: tap where it goes", "value": "relink", "then": "point"}`.
+- For divisions, use `{"label": "Divides", "value": "divides", "then": "points"}`, and the hooman taps both daughters.
+- For manual tracking from scratch, use a follow deck (section 5b).
 
 ### 7.6 Several channels
 

@@ -21,6 +21,11 @@ app/                    the whole app: static files, no build step
   js/editor.js          mask editor: brush, contour, polygon, magic wand, pick, erase, cut, merge,
                         fill holes, delete; objects + classes, channels, undo/redo
   js/contrast.js        black/white point, gamma, invert per deck or channel
+  js/tapping.js         tap answers (point / points) and follow mode (manual tracking)
+  js/gestures.js        tap / pan / pinch / hold for the tap screens
+  js/results.js         results: counts, 95% Wilson intervals, Cohen's kappa vs another export
+  js/backup.js          backup / restore (merging), restoring a deck's own .answers.zip
+  js/settings.js        annotator name, colour-blind palette, backup bookkeeping
   js/prefs.js           per-viewer settings (localStorage)
   js/deck.js            deck.json -> normalized deck + LLM-pasteable errors
   js/importer.js        zip / deck.json / link import, size checks
@@ -33,6 +38,8 @@ app/                    the whole app: static files, no build step
 tools/make_examples.py  builds the example decks (also checks them against the schema)
 tools/make_icons.py     draws the icons
 tests/e2e.py            Playwright test in phone-sized Chromium; screenshots in tests/out/
+tests/e2e_v3.py         0.3 features: tap/follow answers, notes, number/text, per-frame masks, results,
+                        backup/restore, guides, bold, provenance, storage check, copy for the AI, colours
 reference/              the earlier claude.ai pages this app grew from (read-only)
 ```
 
@@ -49,6 +56,7 @@ The service worker and the share target need HTTPS or localhost. Everything else
 
 ```
 python tests/e2e.py
+python tests/e2e_v3.py
 ```
 
 The test covers:

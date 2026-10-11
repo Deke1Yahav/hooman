@@ -59,6 +59,9 @@
           },
           "color": {
             "type": "string"
+          },
+          "guide": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -103,6 +106,19 @@
       "items": {
         "$ref": "#/$defs/card"
       }
+    },
+    "mode": {
+      "enum": [
+        "swipe",
+        "annotate",
+        "follow"
+      ]
+    },
+    "frames_are": {
+      "enum": [
+        "channels",
+        "time"
+      ]
     }
   },
   "additionalProperties": false,
@@ -132,7 +148,11 @@
             },
             "then": {
               "enum": [
-                "draw"
+                "draw",
+                "point",
+                "points",
+                "number",
+                "text"
               ]
             },
             "color": {
@@ -222,6 +242,14 @@
               "items": {
                 "$ref": "#/$defs/overlay"
               }
+            },
+            "start": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 3
             }
           },
           "oneOf": [
@@ -288,7 +316,8 @@
         "style": {
           "enum": [
             "outline",
-            "fill"
+            "fill",
+            "bold"
           ]
         },
         "frame": {

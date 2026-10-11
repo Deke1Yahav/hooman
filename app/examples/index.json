@@ -28,5 +28,10 @@
   "file": "nuclei.hooman.zip",
   "title": "Fix the nuclei (16-bit)",
   "about": "Raw 16-bit microscopy, 2 channels, auto contrast. Fix a model's merged, split and missed nuclei."
+ },
+ {
+  "file": "follow.hooman.zip",
+  "title": "Follow the cells",
+  "about": "Manual tracking: tap the same cell frame after frame. One cell divides."
  }
 ]

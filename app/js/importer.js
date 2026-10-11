@@ -96,8 +96,11 @@ async function load(source, rawText, onProgress) {
     }
   });
   if (big) warnings.push(`${big} card${big > 1 ? "s have images" : " has an image"} larger than 4096 px; phones may be slow (keep the long side at 2048 px or less)`);
+  const bytes = [...blobs.values()].reduce((s, b) => s + b.size, 0);
+  if (bytes > 150e6) warnings.push(`this deck is ${Math.round(bytes / 1e6)} MB; phones are happiest under about 100 MB per deck. Split big sets into parts (llms.txt section 1b)`);
+  if (deck.cards.length > 2000) warnings.push(`this deck has ${deck.cards.length} cards; split it into parts of up to about 1000 (llms.txt section 1b)`);
   if (errs.length) throw new ImportError(errs, warnings);
-  return { deck, blobs, warnings, origin: source.name };
+  return { deck, blobs, warnings, origin: source.name, bytes };
 }
 
 function zipSource(files, name) {
@@ -181,10 +184,11 @@ export async function saveDeck(imported, mode, existing) {
     deck.id = `${deck.id}-${k}`;
   }
   const now = new Date().toISOString();
+  await checkSpace(imported.bytes || 0, mode === "update" && existing ? existing.bytes || 0 : 0);
   if (mode === "update") await store.clearFiles(deck.id);
   await store.putFiles(deck.id, [...blobs].map(([path, blob]) => ({ path, blob })));
   const rec = {
-    key: deck.id, deck, title: deck.title, origin,
+    key: deck.id, deck, title: deck.title, origin, bytes: imported.bytes,
     importedAt: mode === "update" && existing ? existing.importedAt : now, updatedAt: now,
     custom: mode === "update" && existing ? existing.custom : undefined,
     order: mode === "update" && existing && existing.order && deck.shuffle ? mergeOrder(existing.order, deck) : makeOrder(deck),
@@ -192,6 +196,15 @@ export async function saveDeck(imported, mode, existing) {
   await store.putDeck(rec);
   store.askPersistent();
   return rec;
+}
+
+// Before writing the images: is there room for them? (The browser gives each site a share of the free disk.)
+async function checkSpace(bytes, freed) {
+  let est;
+  try { est = await navigator.storage.estimate(); } catch { return; }
+  if (!est || !est.quota) return;
+  const free = est.quota - (est.usage || 0) + freed, mb = (x) => Math.max(1, Math.round(x / 1e6));
+  if (bytes * 1.15 > free) throw new ImportError([`This deck needs about ${mb(bytes)} MB, but this device has only about ${mb(free)} MB free for the app. Free up space, delete an old deck, or split the deck into parts (llms.txt section 1b).`]);
 }
 
 function mergeOrder(old, deck) {

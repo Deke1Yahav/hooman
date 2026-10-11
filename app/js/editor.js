@@ -74,7 +74,9 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
   return new Promise(async (resolve) => {
     const deck = rec.deck, W = card.w, H = card.h, N = W * H;
     const classes = deck.classes || [];
-    const fromSources = deck.sources.filter((s) => card.overlays.some((o) => o.source === s.name && o.shape !== "point"));
+    const guide = new Set(deck.sources.filter((s) => s.guide).map((s) => s.name));
+    const models = deck.sources.filter((s) => !s.guide);
+    const fromSources = models.filter((s) => card.overlays.some((o) => o.source === s.name && o.shape !== "point"));
     const multi = card.frames.length > 1;
     const toolBtn = (t) => `<button class="tool" data-tool="${t}"><b>${TOOLS[t][0]}</b>${TOOLS[t][1]}</button>`;
     const el = document.createElement("div");
@@ -87,7 +89,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       </div>
       <div class="rowx">
         <button class="chip" data-e="contrast" aria-label="Contrast"><span>◐</span></button>
-        ${deck.sources.map((s) => `<button class="chip" data-src="${esc(s.name)}" aria-pressed="${!hidden.has(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}
+        ${models.map((s) => `<button class="chip" data-src="${esc(s.name)}" aria-pressed="${!hidden.has(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}
         ${multi ? `<span class="sep"></span>${card.frames.map((f, i) => `<button class="chip frame" data-frame="${i}" aria-pressed="${i === frame}"><span>${esc(f.name || i + 1)}</span></button>`).join("")}` : ""}
       </div>
       <div class="cwrap"><canvas></canvas><div class="ehint"></div></div>
@@ -110,7 +112,10 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     const $e = (s) => el.querySelector(s);
 
     // ---- state
-    const lab = new Uint16Array(N);
+    // frames_are "time": one mask per frame, and an object's number is the same cell in every frame (a track)
+    const perFrame = deck.framesAre === "time" && multi;
+    const labs = perFrame ? card.frames.map(() => new Uint16Array(N)) : null;
+    let lab = perFrame ? labs[frame] : new Uint16Array(N);
     const meta = new Map();                     // object id -> {cls}
     let current = 1, tool = prefs.get("tool", "brush"), size = prefs.get("brush", 18), tol = prefs.get("wandTol", 0);
     if (!TOOLS[tool] || tool === "fill" || tool === "delete") tool = "brush";
@@ -132,7 +137,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       return c ? c.value : undefined;
     };
     const ensureAs = (id, label) => { ensure(id); const c = classOfLabel(label); if (c) meta.get(id).cls = c; };
-    const nextId = () => { let m = 0; for (let i = 0; i < N; i++) if (lab[i] > m) m = lab[i]; for (const k of meta.keys()) if (k > m) m = k; return m + 1; };
+    const nextId = () => { let m = 0; for (const L of labs || [lab]) for (let i = 0; i < N; i++) if (L[i] > m) m = L[i]; for (const k of meta.keys()) if (k > m) m = k; return m + 1; };
 
     function setFillPx(i, v) {
       const d = fdata.data, k = 4 * i;
@@ -143,7 +148,14 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     function repaintFill() { for (let i = 0; i < N; i++) setFillPx(i, lab[i]); fctx.putImageData(fdata, 0, 0); }
 
     // ---- changes: each user action is one undo step
-    function begin() { change = { old: new Map(), dirty: [Infinity, Infinity, -Infinity, -Infinity], t0: performance.now() }; }
+    function begin(kind = tool) { change = { kind, old: new Map(), dirty: [Infinity, Infinity, -Infinity, -Infinity], t0: performance.now() }; }
+    // provenance per object: which model it started from (and that model's object numbers), and what was done to it
+    const noteFrom = (id, source, value) => {
+      ensure(id); const m = meta.get(id);
+      m.from = m.from || new Set(); m.from.add(source);
+      if (value) { m.fromValues = m.fromValues || new Set(); m.fromValues.add(value); }
+    };
+    const PROVENANCE_ONLY = new Set(["start", "pick", "clear", "delete"]);
     function setPx(i, v) {
       if (lab[i] === v) return;
       if (!change.old.has(i)) change.old.set(i, lab[i]);
@@ -160,9 +172,10 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       if (!change) return null;
       let step = null;
       if (change.old.size) {
-        const after = new Map();
-        for (const i of change.old.keys()) after.set(i, lab[i]);
-        step = { old: change.old, after };
+        const after = new Map(), touched = new Set();
+        for (const [i, was] of change.old) { after.set(i, lab[i]); if (was) touched.add(was); if (lab[i]) touched.add(lab[i]); }
+        if (!PROVENANCE_ONLY.has(change.kind)) for (const id of touched) { ensure(id); const m = meta.get(id); (m.edits = m.edits || new Set()).add(change.kind); }
+        step = { old: change.old, after, frame: view.frame };
         undoStack.push(step); redoStack = [];
         if (undoStack.length > 60) undoStack.shift();
       }
@@ -183,9 +196,16 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     }
     const undo = () => {
       if (poly && poly.length) { poly.pop(); if (!poly.length) poly = null; refresh(); return; }
-      const s = undoStack.pop(); if (s) { redoStack.push(s); applyStep(s.old); }
+      const s = undoStack.pop(); if (s) { redoStack.push(s); if (perFrame && s.frame !== view.frame) switchFrame(s.frame); applyStep(s.old); }
     };
-    const redo = () => { const s = redoStack.pop(); if (s) { undoStack.push(s); applyStep(s.after); } };
+    const redo = () => { const s = redoStack.pop(); if (s) { undoStack.push(s); if (perFrame && s.frame !== view.frame) switchFrame(s.frame); applyStep(s.after); } };
+    function switchFrame(i) {
+      view.setFrame(i);
+      el.querySelectorAll("[data-frame]").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.frame === view.frame)));
+      if (!perFrame) return;
+      lab = labs[i]; poly = null; lastWand = null; path = null;
+      repaintFill(); refresh();
+    }
 
     // ---- brush strokes (brush, contour, erase)
     const brushR = () => Math.max(0.5, size / 2 / view.s);
@@ -210,16 +230,17 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
 
     // ---- objects
     function presentIds() { const s = new Set(); for (let i = 0; i < N; i++) if (lab[i]) s.add(lab[i]); return s; }
+    function allIds() { if (!perFrame) return presentIds(); const s = new Set(); for (const L of labs) for (let i = 0; i < N; i++) if (L[i]) s.add(L[i]); return s; }
     function refresh() {
-      const ids = presentIds();
-      for (const id of [...meta.keys()]) if (!ids.has(id) && id !== current) meta.delete(id);
+      const ids = presentIds(), every = allIds();
+      for (const id of [...meta.keys()]) if (!every.has(id) && id !== current) meta.delete(id);
       ensure(current);
       outlineAll = ids.size ? outlinePath({ width: W, height: H, labels: lab }) : null;
       outlineCur = ids.has(current) ? outlinePath({ width: W, height: H, labels: lab }, current) : null;
-      const list = [...new Set([...ids, current])].sort((a, b) => a - b);
+      const list = [...new Set([...every, current])].sort((a, b) => a - b);
       $e("[data-objects]").innerHTML = list.map((id) => {
         const m = meta.get(id) || {}, cls = classes.find((c) => c.value === m.cls);
-        return `<button class="chip ${id === current ? "on" : ""}" data-obj="${id}" style="color:${esc(colorOf(id))}"><i></i><span style="color:var(--text)">${id}${cls ? ` ${esc(cls.label)}` : ""}${ids.has(id) ? "" : " (empty)"}</span></button>`;
+        return `<button class="chip ${id === current ? "on" : ""}" data-obj="${id}" style="color:${esc(colorOf(id))}"><i></i><span style="color:var(--text)">${id}${cls ? ` ${esc(cls.label)}` : ""}${ids.has(id) ? "" : every.has(id) ? " (not in this frame)" : " (empty)"}</span></button>`;
       }).join("") + `<button class="chip" data-e="new"><span>＋ New object</span></button>`;
       if (classes.length) {
         const m = meta.get(current) || {};
@@ -294,7 +315,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       }
       fillHolesIn(reg, ww, wh, bx0, by0, bx1, by1);
       const id = forceId || freshId();
-      begin();
+      begin("wand");
       for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) if (reg[y * ww + x]) { const i = (y0 + y) * W + x0 + x; if (!lab[i]) setPx(i, id); }
       current = id;
       const step = commit();
@@ -327,20 +348,20 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       const i0 = at(p);
       if (i0 < 0) return;
       if (lab[i0]) return selectAt(p);            // already drawn: select it instead of copying again
-      const ovs = card.overlays.filter((o) => !hidden.has(o.source) && o.shape !== "point" && (o.frame === undefined || o.frame === view.frame));
+      const ovs = card.overlays.filter((o) => !guide.has(o.source) && !hidden.has(o.source) && o.shape !== "point" && (o.frame === undefined || o.frame === view.frame));
       for (let k = ovs.length - 1; k >= 0; k--) {
         const o = ovs[k];
         if (o.shape === "mask") {
           const L = (await loadLabels(rec.key, o.mask)).labels, v = L[i0];
           if (!v || (o.value && v !== o.value)) continue;
-          const id = freshId(); ensureAs(id, o.label);
-          begin(); for (let i = 0; i < N; i++) if (L[i] === v && !lab[i]) setPx(i, id); commit();
+          const id = freshId(); ensureAs(id, o.label); noteFrom(id, o.source, v);
+          begin("pick"); for (let i = 0; i < N; i++) if (L[i] === v && !lab[i]) setPx(i, id); commit();
           return;
         }
         const pts = o.shape === "box" ? [[o.box[0], o.box[1]], [o.box[0] + o.box[2], o.box[1]], [o.box[0] + o.box[2], o.box[1] + o.box[3]], [o.box[0], o.box[1] + o.box[3]]] : o.polygon;
         if (!inPolygon(p[0], p[1], pts)) continue;
-        const id = freshId(); ensureAs(id, o.label);
-        begin(); fillPolygon(pts, id); commit();
+        const id = freshId(); ensureAs(id, o.label); noteFrom(id, o.source);
+        begin("pick"); fillPolygon(pts, id); commit();
         return;
       }
       if (lab[i0]) selectAt(p); else flashHint("No model outline here. Show a model with its chip above");
@@ -361,7 +382,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
         for (let j = 0; j <= n; j++) mark(ax + ((bx - ax) * j) / n, ay + ((by - ay) * j) / n);
       }
       if (!cutPx.size) return flashHint("The line didn't cross an object");
-      begin();
+      begin("cut");
       for (const i of cutPx.keys()) setPx(i, 0);
       const touched = new Set(cutPx.values()), piecesOf = new Map([...touched].map((L) => [L, new Set([L])]));
       let made = 0;
@@ -378,7 +399,9 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
         }
         pieces.sort((a, b) => b.length - a.length);
         for (const comp of pieces.slice(1)) {
-          const id = nextId(); meta.set(id, { cls: (meta.get(L) || {}).cls }); piecesOf.get(L).add(id);
+          const m0 = meta.get(L) || {}, id = nextId();
+          meta.set(id, { cls: m0.cls, from: m0.from && new Set(m0.from), fromValues: m0.fromValues && new Set(m0.fromValues), edits: new Set(m0.edits || []) });
+          piecesOf.get(L).add(id);
           for (const i of comp) setPx(i, id);
           made++;
         }
@@ -407,10 +430,15 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       const t = lab[i0];
       if (!mergeInto || !presentIds().has(mergeInto) || t === mergeInto) { mergeInto = current = t; refresh(); return; }
       current = mergeInto;
-      begin(); for (let i = 0; i < N; i++) if (lab[i] === t) setPx(i, mergeInto); commit();
+      const a = meta.get(mergeInto) || {}, b = meta.get(t) || {};
+      ensure(mergeInto);
+      for (const src of b.from || []) noteFrom(mergeInto, src);
+      for (const v of b.fromValues || []) noteFrom(mergeInto, [...(b.from || a.from || ["?"])][0], v);
+      for (const e of b.edits || []) (meta.get(mergeInto).edits = meta.get(mergeInto).edits || new Set()).add(e);
+      begin("merge"); for (let i = 0; i < N; i++) if (lab[i] === t) setPx(i, mergeInto); commit();
     }
     function deleteCurrent() {
-      begin(); for (let i = 0; i < N; i++) if (lab[i] === current) setPx(i, 0); commit();
+      begin("delete"); for (let i = 0; i < N; i++) if (lab[i] === current) setPx(i, 0); commit();
     }
     function fillHolesCurrent() {
       let bx0 = W, by0 = H, bx1 = -1, by1 = -1;
@@ -419,7 +447,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       const ww = bx1 - bx0 + 1, wh = by1 - by0 + 1, reg = new Uint8Array(ww * wh);
       for (let y = 0; y < wh; y++) for (let x = 0; x < ww; x++) reg[y * ww + x] = lab[(by0 + y) * W + bx0 + x] === current ? 1 : 0;
       fillHolesIn(reg, ww, wh, 0, 0, ww - 1, wh - 1);
-      begin();
+      begin("fill");
       for (let y = 0; y < wh; y++) for (let x = 0; x < ww; x++) if (reg[y * ww + x]) { const i = (by0 + y) * W + bx0 + x; if (!lab[i]) setPx(i, current); }
       const n = change.old.size;
       commit();
@@ -429,7 +457,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     // ---- start from a model's mask / shapes
     async function startFrom(name) {
       const ovs = card.overlays.filter((o) => o.source === name && o.shape !== "point" && (o.frame === undefined || o.frame === view.frame));
-      begin();
+      begin("start");
       let next = nextId(), first = null;
       for (const o of ovs) {
         if (o.shape === "mask") {
@@ -449,13 +477,13 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
             const v = L[i];
             if (!v || (vals && !vals.has(v)) || lab[i]) continue;
             let id = idmap.get(v);
-            if (!id) { id = next++; idmap.set(v, id); ensureAs(id, o.label); }
+            if (!id) { id = next++; idmap.set(v, id); ensureAs(id, o.label); noteFrom(id, o.source, v); }
             setPx(i, id);
           }
           if (first === null && idmap.size) first = [...idmap.values()][0];
         } else {
           const pts = o.shape === "box" ? [[o.box[0], o.box[1]], [o.box[0] + o.box[2], o.box[1]], [o.box[0] + o.box[2], o.box[1] + o.box[3]], [o.box[0], o.box[1] + o.box[3]]] : o.polygon;
-          const id = next++; ensureAs(id, o.label);
+          const id = next++; ensureAs(id, o.label); noteFrom(id, o.source);
           fillPolygon(pts, id);
           if (first === null) first = id;
         }
@@ -584,12 +612,31 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     }
     async function finish() {
       if (poly && poly.length >= 3) closePolygon();
-      const map = new Map(), out = new Uint16Array(N);
+      const map = new Map();                    // one renumbering for all frames, so a cell keeps its number (track)
       let n = 0;
-      for (let i = 0; i < N; i++) { const v = lab[i]; if (!v) continue; let m = map.get(v); if (!m) { m = ++n; map.set(v, m); } out[i] = m; }
-      const objects = [...map].map(([old, value]) => { const m = meta.get(old); return m && m.cls ? { value, class: m.cls } : { value }; });
+      const renum = (L) => { const out = new Uint16Array(N); for (let i = 0; i < N; i++) { const v = L[i]; if (!v) continue; let m = map.get(v); if (!m) { m = ++n; map.set(v, m); } out[i] = m; } return out; };
+      const describe = (old, value) => {
+        const m = meta.get(old) || {}, o = { value };
+        if (m.cls) o.class = m.cls;
+        if (m.from && m.from.size) { o.from = m.from.size === 1 ? [...m.from][0] : [...m.from]; if (m.fromValues && m.fromValues.size) o.from_values = [...m.fromValues].sort((a, b) => a - b); }
+        if (m.edits && m.edits.size) o.edits = [...m.edits];
+        return o;
+      };
+      const usedFrom = () => { const s = new Set(); for (const old of map.keys()) for (const f of (meta.get(old) || {}).from || []) s.add(f); return [...s]; };
+      const objs = (L) => [...new Set(L)].filter(Boolean).sort((a, b) => a - b).map((value) => describe([...map].find(([, m]) => m === value)[0], value));
+      if (perFrame) {
+        const masks = [];
+        for (let f = 0; f < labs.length; f++) {
+          const out = renum(labs[f]);
+          if (out.some((v) => v)) masks.push({ frame: f, mask: await encodeLabelPNG(out, W, H), objects: objs(out) });
+        }
+        const objects = [...map].map(([old, value]) => describe(old, value));
+        return close({ masks, objects, frame, count: n, from: usedFrom() });
+      }
+      const out = renum(lab);
+      const objects = [...map].map(([old, value]) => describe(old, value));
       const mask = n ? await encodeLabelPNG(out, W, H) : null;
-      close({ mask, objects, frame, count: n });
+      close({ mask, objects, frame, count: n, from: usedFrom() });
     }
     function setTool(t) {
       if (t === "fill") return fillHolesCurrent();
@@ -609,11 +656,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
         if (hidden.has(n)) hidden.delete(n); else hidden.add(n);
         t.setAttribute("aria-pressed", String(!hidden.has(n))); view.setHidden(hidden); return;
       }
-      if (t.dataset.frame !== undefined) {
-        view.setFrame(+t.dataset.frame);
-        el.querySelectorAll("[data-frame]").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.frame === view.frame)));
-        return;
-      }
+      if (t.dataset.frame !== undefined) return switchFrame(+t.dataset.frame);
       if (t.dataset.from !== undefined) { startFrom(t.dataset.from); return; }
       const a = t.dataset.e;
       if (a === "undo") undo();
@@ -625,7 +668,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
         const src = view.sources[view.frame] || view.sources[0];
         openContrast(rec.key, multi ? card.frames[view.frame].name || "" : "", src.bits === 16);
       }
-      else if (a === "clear") { begin(); for (let i = 0; i < N; i++) if (lab[i]) setPx(i, 0); fctx.putImageData(fdata, 0, 0); commit(); }
+      else if (a === "clear") { begin("clear"); for (let i = 0; i < N; i++) if (lab[i]) setPx(i, 0); fctx.putImageData(fdata, 0, 0); commit(); }
       else if (a === "done") finish();
       else if (a === "cancel") {
         if (!undoStack.length || Date.now() - discardArmed < 3000) return close(null);
@@ -662,14 +705,17 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
     el._debug = () => { const ids = presentIds(); let px = 0; for (let i = 0; i < N; i++) if (lab[i]) px++; return { objects: ids.size, pixels: px, current, tool, frame: view.frame, view: { s: view.s, ox: view.ox, oy: view.oy }, classes: [...ids].map((id) => (meta.get(id) || {}).cls || null) }; };
 
     // ---- load: earlier mask, then show
-    if (initial && initial.mask) {
-      try {
-        const d = await decodeLabelPNG(await initial.mask.arrayBuffer());
-        if (d.width === W && d.height === H) for (let i = 0; i < N; i++) lab[i] = d.labels[i];
-        for (const o of initial.objects || []) meta.set(o.value, { cls: o.class });
-      } catch (err) { console.error(err); }
-    }
-    const ids = presentIds();
+    const loadInto = async (blob, L) => {
+      const d = await decodeLabelPNG(await blob.arrayBuffer());
+      if (d.width === W && d.height === H) for (let i = 0; i < N; i++) L[i] = d.labels[i];
+    };
+    try {
+      if (initial && perFrame && initial.masks) for (const m of initial.masks) { if (labs[m.frame]) await loadInto(m.mask, labs[m.frame]); }
+      else if (initial && initial.mask) await loadInto(initial.mask, lab);
+      for (const o of (initial && initial.objects) || []) meta.set(o.value, { cls: o.class,
+        from: o.from ? new Set([].concat(o.from)) : undefined, fromValues: o.from_values ? new Set(o.from_values) : undefined, edits: o.edits ? new Set(o.edits) : undefined });
+    } catch (err) { console.error(err); }
+    const ids = allIds();
     current = ids.size ? Math.min(...ids) : 1;
     for (const id of ids) ensure(id);
     repaintFill();

@@ -7,8 +7,9 @@ const SLOT_COLORS = { right: "#3ddc97", left: "#ff5d6c", up: "#f2c14e", down: "#
 const BUTTON_COLORS = ["#4fc3f7", "#ff8fab", "#c6ff3d", "#ffa94d", "#b9e3ff", "#e599f7"];
 export const DEFAULT_ANSWERS = { right: "Yes", left: "No", up: "Unsure" };
 
-const TOP = ["hooman", "id", "title", "question", "help", "answers", "buttons", "sources", "classes", "shuffle", "cards"];
-const CARD = ["id", "image", "frames", "question", "info", "focus", "overlays"];
+const TOP = ["hooman", "id", "title", "question", "help", "answers", "buttons", "sources", "classes", "shuffle", "cards", "mode", "frames_are"];
+const CARD = ["id", "image", "frames", "question", "info", "focus", "overlays", "start"];
+export const THEN = ["draw", "point", "points", "number", "text"];
 const OVERLAY = ["box", "point", "polygon", "mask", "source", "label", "value", "style", "frame"];
 const HINTS = {
   answer: "answers", images: "cards", items: "cards", card: "cards", files: "cards", version: "hooman",
@@ -66,7 +67,13 @@ export function normalizeDeck(raw, files, fileName = "deck") {
   }
   for (const k of ["title", "question", "help"]) if (raw[k] !== undefined && typeof raw[k] !== "string") err(`deck.json: "${k}" must be text`);
   const title = isStr(raw.title) ? raw.title.trim() : id;
-  const question = isStr(raw.question) ? raw.question.trim() : null;
+  let question = isStr(raw.question) ? raw.question.trim() : null;
+  if (raw.mode !== undefined && !["swipe", "annotate", "follow"].includes(raw.mode)) err(`deck.json: "mode" must be "swipe", "annotate" or "follow"`);
+  const mode = raw.mode === "follow" ? "follow" : raw.mode === "annotate" ? "annotate" : question ? "swipe" : "annotate";
+  if (mode === "swipe" && !question) err('deck.json: "mode": "swipe" needs a "question"');
+  if (mode === "annotate") question = null;
+  if (raw.frames_are !== undefined && !["channels", "time"].includes(raw.frames_are)) err('deck.json: "frames_are" must be "channels" or "time"');
+  const framesAre = raw.frames_are === "time" || (raw.frames_are === undefined && mode === "follow") ? "time" : "channels";
   if (raw.shuffle !== undefined && typeof raw.shuffle !== "boolean") err("deck.json: \"shuffle\" must be true or false");
 
   // sources first: answer colours can come from them
@@ -81,7 +88,9 @@ export function normalizeDeck(raw, files, fileName = "deck") {
     else for (const [name, v] of Object.entries(raw.sources)) {
       const o = v && typeof v === "object" ? v : {};
       if (v !== null && typeof v !== "object") err(`sources.${name}: must be an object like {"label": "Model A", "color": "#ff5d6c"}`);
-      addSource(name, isStr(o.label) ? o.label : name, isStr(o.color) ? o.color : null);
+      if (o.guide !== undefined && typeof o.guide !== "boolean") err(`sources.${name}: "guide" must be true or false`);
+      const s = addSource(name, isStr(o.label) ? o.label : name, isStr(o.color) ? o.color : null);
+      if (o.guide === true) { s.guide = true; if (!isStr(o.color)) s.color = "#ffffff"; }
     }
   }
 
@@ -95,13 +104,13 @@ export function normalizeDeck(raw, files, fileName = "deck") {
       if (!isStr(v.label)) { err(`${where}: needs a "label", for example {"label": "Yes", "value": "yes"}`); return null; }
       o = { label: v.label.trim() };
       if (v.value !== undefined) { if (isStr(v.value)) o.value = v.value.trim(); else err(`${where}: "value" must be text`); }
-      if (v.then !== undefined) { if (v.then === "draw") o.then = "draw"; else err(`${where}: "then" can only be "draw"`); }
+      if (v.then !== undefined) { if (THEN.includes(v.then)) o.then = v.then; else err(`${where}: "then" must be one of ${THEN.map(q).join(", ")}`); }
       if (v.color !== undefined) { if (isStr(v.color)) o.color = v.color; else err(`${where}: "color" must be a CSS colour like "#3ddc97"`); }
       if (v.celebrate !== undefined) { if (typeof v.celebrate === "boolean") { if (v.celebrate) o.celebrate = true; } else err(`${where}: "celebrate" must be true or false`); }
     } else { err(`${where}: must be a label string or {"label": ..., "value": ...}`); return null; }
     o.value = o.value || slug(o.label);
     o.slot = slot;
-    o.color = o.color || (srcIndex.has(o.value) ? srcIndex.get(o.value).color : slot === "button" ? BUTTON_COLORS[i % BUTTON_COLORS.length] : SLOT_COLORS[slot]);
+    o.color = o.color || (srcIndex.has(o.value) && !srcIndex.get(o.value).guide ? srcIndex.get(o.value).color : slot === "button" ? BUTTON_COLORS[i % BUTTON_COLORS.length] : SLOT_COLORS[slot]);
     return o;
   };
   const rawAnswers = raw.answers === undefined ? DEFAULT_ANSWERS : raw.answers;
@@ -121,8 +130,8 @@ export function normalizeDeck(raw, files, fileName = "deck") {
       raw.buttons.slice(0, 6).forEach((b, i) => { const a = parseAnswer(b, "button", `buttons[${i}]`, i); if (a) answers.push(a); });
     }
   }
-  if (question && answers.length === 0 && errors.length === 0) err("deck.json: the deck has a question but no answers; add \"answers\" or leave it out to get Yes/No/Unsure");
-  if (!question && raw.answers !== undefined) warn("deck.json: there is no \"question\", so this is an annotate deck (every card opens the mask editor) and \"answers\" are not used");
+  if (mode === "swipe" && answers.length === 0 && errors.length === 0) err("deck.json: the deck has a question but no answers; add \"answers\" or leave it out to get Yes/No/Unsure");
+  if (mode !== "swipe" && raw.answers !== undefined) warn(`deck.json: this is ${mode === "follow" ? "a follow deck (the hooman taps the cell in every frame)" : "an annotate deck (every card opens the mask editor)"}, so "answers" are not used`);
 
   // classes (mask editor)
   const classes = [];
@@ -190,6 +199,10 @@ export function normalizeDeck(raw, files, fileName = "deck") {
       if (!(typeof cid === "string" && cid.length > 0) && typeof cid !== "number") err(`${where}: "id" must be text`);
       card = { id: String(cid), frames, overlays: [] };
       for (const k of ["question", "info"]) if (c[k] !== undefined) { if (typeof c[k] === "string") card[k] = c[k]; else err(`${where}: "${k}" must be text`); }
+      if (c.start !== undefined) {
+        if (Array.isArray(c.start) && (c.start.length === 2 || c.start.length === 3) && c.start.every(isNum) && (c.start.length === 2 || (Number.isInteger(c.start[2]) && c.start[2] >= 0 && c.start[2] < frames.length))) card.start = c.start;
+        else err(`${where}: "start" must be [x, y] or [x, y, frame] (the cell to follow)`);
+      }
       if (c.focus !== undefined) {
         if (Array.isArray(c.focus) && c.focus.length === 4 && c.focus.every(isNum) && c.focus[2] > 0 && c.focus[3] > 0) card.focus = c.focus;
         else err(`${where}: "focus" must be [x, y, w, h] in pixels with w and h above 0`);
@@ -231,7 +244,7 @@ export function normalizeDeck(raw, files, fileName = "deck") {
             else err(`${ow}: "value" must be a whole number of 1 or more (the object's label in the mask)`);
             if (shape !== "mask") warn(`${ow}: "value" only applies to masks`);
           }
-          if (o.style !== undefined) { if (o.style === "outline" || o.style === "fill") ov.style = o.style; else err(`${ow}: "style" must be "outline" or "fill"`); }
+          if (o.style !== undefined) { if (["outline", "fill", "bold"].includes(o.style)) ov.style = o.style; else err(`${ow}: "style" must be "outline", "fill" or "bold"`); }
           if (o.frame !== undefined) {
             if (Number.isInteger(o.frame) && o.frame >= 0 && o.frame < frames.length) ov.frame = o.frame;
             else err(`${ow}: "frame" ${q(o.frame)} must be a frame index from 0 to ${Math.max(0, frames.length - 1)}`);
@@ -246,12 +259,19 @@ export function normalizeDeck(raw, files, fileName = "deck") {
   });
 
   if (errors.length) return { deck: null, errors, warnings, paths };
-  // annotate decks answer with a drawing; these two values label it in tallies and exports
-  const finalAnswers = question ? answers : [
+  if (mode === "follow") cards.forEach((c, i) => { if (c.frames.length < 2) errors.push(`cards[${i}] (id ${q(c.id)}): a follow deck needs "frames" (at least 2 time points)`); });
+  if (errors.length) return { deck: null, errors, warnings, paths };
+  // annotate and follow decks answer with a drawing or a track; these values label it in tallies and exports
+  const finalAnswers = mode === "swipe" ? answers : mode === "annotate" ? [
     { slot: "button", label: "Annotated", value: "annotated", color: "#c6ff3d" },
     { slot: "button", label: "Nothing to mark", value: "empty", color: "#8fa3aa" },
+  ] : [
+    { slot: "button", label: "Followed to the end", value: "last_frame", color: "#3ddc97" },
+    { slot: "button", label: "Cell ends", value: "ends", color: "#ff5d6c" },
+    { slot: "button", label: "Divides", value: "divides", color: "#b48cff" },
+    { slot: "button", label: "Leaves view", value: "leaves", color: "#f2c14e" },
   ];
-  const deck = { hooman: FORMAT, id, title, question, help: isStr(raw.help) ? raw.help : "", shuffle: !!raw.shuffle, answers: finalAnswers, sources, classes, cards };
+  const deck = { hooman: FORMAT, id, title, question, mode, framesAre, help: isStr(raw.help) ? raw.help : "", shuffle: !!raw.shuffle, answers: finalAnswers, sources, classes, cards };
   return { deck, errors, warnings, paths };
 }
 
