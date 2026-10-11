@@ -73,3 +73,7 @@ git branch -D gh-pages-new
 ```
 
 Any other static HTTPS host works too (Netlify, a lab server): copy `app/` as it is.
+
+## Licence
+
+[MIT](LICENSE): free for everyone to use, change and share. The bundled fonts (Atkinson Hyperlegible, JetBrains Mono) are under the SIL Open Font License; see [app/fonts/OFL.txt](app/fonts/OFL.txt).
