@@ -1,0 +1,27 @@
+[
+ {
+  "file": "circles.hooman.zip",
+  "title": "Is it a circle?",
+  "about": "The smallest possible deck: images and one yes/no question."
+ },
+ {
+  "file": "duel.hooman.zip",
+  "title": "Model A vs model B",
+  "about": "Two models' masks on the same cells. Pick the right one, or say both are wrong."
+ },
+ {
+  "file": "boxes.hooman.zip",
+  "title": "Check a detector",
+  "about": "Boxes with labels and scores, plus extra answer buttons."
+ },
+ {
+  "file": "timelapse.hooman.zip",
+  "title": "Follow a track",
+  "about": "Three frames per card: does the tracker stay on one cell?"
+ },
+ {
+  "file": "fruit.hooman.zip",
+  "title": "Mask the fruit",
+  "about": "No question: draw masks with classes (apple, orange, leaf). Shows the mask editor."
+ }
+]

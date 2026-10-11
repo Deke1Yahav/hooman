@@ -1,0 +1,254 @@
+# Hooman in the Loop: deck format, version 1
+
+> The AI guesses. The hooman decides.
+
+Hooman in the Loop (https://deke1yahav.github.io/hooman/) is a phone app (a web app that installs and works offline). A person judges images by swiping and fixes masks by drawing on them. You, an LLM, build a **deck** for them: a zip with a `deck.json` and the images. The person opens the deck in the app, answers every card, and exports the answers back to you.
+
+Everything below is the whole format. Every field is optional except the ones marked **required**.
+
+## 1. Smallest deck
+
+```
+cats.hooman.zip
+├── deck.json
+└── img/
+    ├── 001.jpg
+    └── 002.jpg
+```
+
+deck.json:
+
+```json
+{"hooman": 1, "question": "Is there a cat?", "cards": ["img/001.jpg", "img/002.jpg"]}
+```
+
+By default, swipe right = Yes, left = No and up = Unsure. UNDO is always there.
+
+Make the zip with only the Python standard library:
+
+```python
+import json, zipfile, pathlib
+src = pathlib.Path("my_images")                      # folder with the images
+cards = [f"img/{p.name}" for p in sorted(src.glob("*.jpg"))]
+deck = {"hooman": 1, "id": "cats-v1", "title": "Cats", "question": "Is there a cat?", "cards": cards}
+with zipfile.ZipFile("cats.hooman.zip", "w") as z:
+    z.writestr("deck.json", json.dumps(deck, indent=1))
+    for p in sorted(src.glob("*.jpg")):
+        z.write(p, f"img/{p.name}")
+```
+
+Rules for the zip:
+- `deck.json` sits at the top of the zip (one wrapping folder is tolerated).
+- Paths are relative to `deck.json`, use `/`, and are case-sensitive.
+- Images are JPEG, PNG, WebP or GIF. **No TIFF.** Convert it first (recipe 7.4).
+- Keep the long side of each image at 2048 px or less. Phones are slow with bigger images.
+- Any path may instead be an `https://` URL. The app downloads it once at import, so the host must allow cross-origin requests (GitHub raw and gists do).
+
+## 2. deck.json
+
+| field | type | meaning |
+|---|---|---|
+| `hooman` | `1` | **required**: the format version |
+| `id` | string | Stable deck ID (letters, digits, `.`, `_`, `-`). Answers are kept by deck ID and card ID: rebuild with the **same** id to keep the answers already given, and use a **new** id for a fresh start. Default: taken from the title or the file name. |
+| `title` | string | Shown in the deck list |
+| `question` | string | Shown above every card. **Leave it out for annotate mode** (section 5). |
+| `help` | string | Longer instructions, shown under the `?` button |
+| `answers` | object | The swipe directions (section 3) |
+| `buttons` | list | Extra answers as buttons (section 3) |
+| `sources` | object | Who made each overlay, and its colour (section 4) |
+| `classes` | list | Object classes for the mask editor (section 5) |
+| `shuffle` | bool | Show the cards in random order (default `false`) |
+| `cards` | list | **required**: the cards (section 4) |
+
+## 3. Answers
+
+`answers` maps the directions `right`, `left`, `up` and `down` to an answer. If `answers` is present, **only the directions you list are active**. An answer is either a plain label string or an object:
+
+```json
+"answers": {
+  "left":  {"label": "A is right", "value": "A"},
+  "right": {"label": "B is right", "value": "B"},
+  "up":    {"label": "Both wrong", "value": "both_wrong", "then": "draw"},
+  "down":  "Unsure"
+}
+```
+
+- `label` is what the button and swipe stamp show.
+- `value` is what gets saved. The default is the label in lowercase, with spaces turned into `_`.
+- `then: "draw"` opens the mask editor after this answer. The saved answer includes the hooman's mask, and the editor can start from any overlay's mask.
+- `color` sets a CSS colour. By default, an answer whose `value` equals a source name takes that source's colour, so the "A" button is the same colour as A's outlines.
+
+`buttons` holds extra answers that have no swipe direction. It takes the same string or object items, at most 6:
+
+```json
+"buttons": ["Blurry", {"label": "Dead cell", "value": "dead"}]
+```
+
+The hooman can also rename, add and hide answers inside the app. Answers are stored by `value`.
+
+## 4. Cards and overlays
+
+A card is an image path string, or an object:
+
+| field | type | meaning |
+|---|---|---|
+| `image` | path | **required** unless `frames` is used |
+| `frames` | list | Instead of `image`: several images of the same size (a time series, z-stack or channels), as paths or `{"image": path, "name": "t+1"}` objects. Shown with frame buttons and a play button. |
+| `id` | string | Unique card ID. Default: the image path. |
+| `question` | string | Replaces the deck question for this card |
+| `info` | string | A small caption under the image (scores, metadata) |
+| `focus` | `[x, y, w, h]` | The card opens zoomed to this box, so one object of a big image can be its own card without cropping |
+| `overlays` | list | What a model or algorithm found on this image |
+
+Coordinates are **pixels of the full-size image**: origin at the top-left, x to the right, y down.
+
+Each overlay has exactly one shape:
+
+| shape | example |
+|---|---|
+| box | `{"box": [x, y, w, h]}` |
+| point | `{"point": [x, y]}` |
+| polygon | `{"polygon": [[x, y], [x, y], [x, y]]}` (3 or more points, closed automatically) |
+| mask | `{"mask": "masks/001.png"}`: a PNG **label image** (see below) |
+
+and these optional fields:
+
+| field | meaning |
+|---|---|
+| `source` | Who made it (a model name). Default: `"model"`. Each source keeps one colour everywhere and can be shown or hidden. |
+| `label` | Short text drawn next to the shape, for example `"cat 0.83"` |
+| `value` | Masks only: show just the object with this label value |
+| `style` | `"outline"` (default) or `"fill"` |
+| `frame` | With `frames`: the 0-based frame this overlay belongs to. Default: all frames. |
+
+**Label image (mask)** rules:
+- A PNG of the **same width and height** as the card image.
+- `0` = background, and every other value is one object.
+- Use 8-bit grayscale for up to 255 objects, 16-bit grayscale for more, or a palette PNG (palette index = label).
+- In an RGB PNG, the label is `R*65536 + G*256 + B`.
+- With numpy and Pillow: `Image.fromarray(labels.astype("uint8" if labels.max() < 256 else "uint16")).save(path)`.
+- The app draws each object's outline, so don't burn outlines into the image.
+
+`sources` sets names and colours, in this order of preference:
+
+```json
+"sources": {"A": {"label": "Model A", "color": "#ff5d6c"}, "B": {"label": "Model B", "color": "#3ddc97"}}
+```
+
+Without `sources`, colours are assigned in order of first appearance: red, green, blue, yellow, purple and pink.
+
+## 5. Annotate mode and the mask editor
+
+Leave `question` out, and every card opens straight in the mask editor. The hooman draws objects (brush, eraser, lasso fill, new object) and taps DONE. Optional `classes` adds a class picker:
+
+```json
+{"hooman": 1, "title": "Mask my plants", "classes": ["leaf", "flower", {"value": "pot", "color": "#f2c14e"}], "cards": ["img/1.jpg"]}
+```
+
+- The hooman can copy a card's existing overlays (masks, boxes and polygons) into the editor as a starting point.
+- When an overlay's `label` starts with a class name, as in `"apple 0.83"`, the copied object gets that class.
+- On a card with `focus`, a mask contributes only the object(s) that fill the focus box.
+- The saved answer is `"annotated"`, or `"empty"` when nothing was drawn.
+
+## 6. What comes back
+
+In the app, the hooman taps **Export**. They get `<deck id>.answers.zip`, which contains:
+
+- `answers.csv`, one row per card. Columns: `card_id, image, answer, label, answered_at, ms, changes, mask`.
+  - `ms` is the time spent on the card.
+  - `changes` counts how many times the answer was changed.
+- `answers.json`, which holds the same data and the full history:
+
+```json
+{"hooman_answers": 1,
+ "deck": {"id": "duel-v1", "title": "Model duel", "question": "Which model got it right?"},
+ "exported_at": "2026-10-11T18:00:00Z",
+ "answers": [{"card": "001", "image": "img/001.png", "answer": "both_wrong", "label": "Both wrong",
+              "at": "2026-10-11T17:59:01Z", "ms": 4200, "changes": 0,
+              "overlays": [{"source": "hooman", "mask": "masks/001.png"}],
+              "objects": [{"value": 1, "class": "leaf"}, {"value": 2}]}],
+ "unanswered": ["002"],
+ "history": [{"card": "001", "answer": "both_wrong", "at": "..."}, {"card": "002", "answer": null, "at": "...", "undo": true}]}
+```
+
+- `masks/<card id>.png` holds the hooman's masks, in the same label-image format as the input. A `/` in a card ID becomes `__` in the file name.
+- `objects` lists each label value in that mask, with its class when the deck has `classes`.
+
+Join the results back to your data on `card` (the card ID).
+
+## 7. Recipes
+
+### 7.1 Model A vs model B (with "both wrong → draw")
+
+```python
+import json, zipfile, io
+import numpy as np
+from PIL import Image
+def png(arr):
+    b = io.BytesIO(); Image.fromarray(arr).save(b, "PNG"); return b.getvalue()
+deck = {"hooman": 1, "id": "duel-v1", "title": "Model duel", "question": "Which model got it right?",
+        "sources": {"A": {}, "B": {}},
+        "answers": {"left": {"label": "A is right", "value": "A"}, "right": {"label": "B is right", "value": "B"},
+                    "up": {"label": "Both wrong", "value": "both_wrong", "then": "draw"}, "down": "Unsure"},
+        "cards": []}
+with zipfile.ZipFile("duel.hooman.zip", "w") as z:
+    for name, image, mask_a, mask_b in my_items:          # image: uint8 HxW or HxWx3; masks: int label arrays
+        z.writestr(f"img/{name}.png", png(image))
+        z.writestr(f"A/{name}.png", png(mask_a.astype(np.uint16)))
+        z.writestr(f"B/{name}.png", png(mask_b.astype(np.uint16)))
+        deck["cards"].append({"id": name, "image": f"img/{name}.png",
+                              "overlays": [{"source": "A", "mask": f"A/{name}.png"},
+                                           {"source": "B", "mask": f"B/{name}.png"}]})
+    z.writestr("deck.json", json.dumps(deck))
+```
+
+To keep only the disagreements, skip items where the two masks agree well (for example, IoU above 0.9).
+
+### 7.2 One card per object
+
+For each object in a label image, add a card for the same image with `"focus": [x, y, w, h]` (the object's bounding box with some margin) and `{"mask": "...", "value": <label>}`. Also add a second overlay with the full mask in `"style": "outline"` if the neighbours matter. Give each card a unique `id`, such as `"img7_obj12"`.
+
+### 7.3 From COCO
+
+- A box: `{"box": ann["bbox"], "label": cat_name}`, since COCO's bbox is already `[x, y, w, h]`.
+- A polygon: for each `seg` in `ann["segmentation"]`, use `{"polygon": [[seg[i], seg[i+1]] for i in range(0, len(seg), 2)]}`.
+- RLE segmentations: decode them with pycocotools into a label image.
+
+### 7.4 From TIFF or 16-bit microscopy
+
+Convert to an 8-bit PNG with a percentile stretch. A 16-bit label TIFF can stay 16-bit as a PNG.
+
+```python
+import numpy as np; from PIL import Image
+a = np.asarray(Image.open("x.tif")).astype(float)      # or tifffile.imread
+lo, hi = np.percentile(a, [0.5, 99.8]); a = np.clip((a - lo) / (hi - lo + 1e-9), 0, 1)
+Image.fromarray((a * 255).astype(np.uint8)).save("x.png")
+```
+
+### 7.5 Cell Tracking Challenge, time-lapse
+
+- Use `frames` for t-1, t and t+1.
+- Use the `man_seg*.tif` / `mask*.tif` label images as masks, converted to 16-bit PNG.
+- Use `frame` on each overlay.
+
+### 7.6 Several channels
+
+Put the channels in `frames` with names, such as `{"image": "c1.png", "name": "DAPI"}`, or combine them into one RGB image yourself.
+
+## 8. Check before you hand it over
+
+- [ ] `deck.json` is at the top of the zip and has `"hooman": 1` and `cards`.
+- [ ] Every path exists in the zip, with exactly that spelling and case.
+- [ ] Card IDs are unique.
+- [ ] Masks are PNG label images with the same width and height as their image.
+- [ ] Coordinates are in full-image pixels.
+- [ ] The `id` stays the same when rebuilding a deck the hooman has already started.
+
+If the app rejects a deck, it shows an exact error, such as `cards[16] (id "017"): image "img/017.jpg" is not in the zip (did you mean "img/017.JPG"?)`. The hooman can paste that error back to you.
+
+## 9. Getting the deck onto the phone
+
+- **A file:** give the hooman the `.hooman.zip`. They open the app and tap **Import**, or share the zip to the installed app from the phone's share sheet.
+- **A link:** host `deck.json` (and its images, with relative paths) or the zip at a public URL that allows cross-origin requests, such as GitHub raw or a gist. Then give the hooman `https://deke1yahav.github.io/hooman/?deck=<url-encoded URL>`. The same link also works as a QR code.
+
+Everything stays on the hooman's phone. There's no account and no server.
