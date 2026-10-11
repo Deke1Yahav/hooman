@@ -91,12 +91,13 @@ export function normalizeDeck(raw, files, fileName = "deck") {
     let o;
     if (isStr(v)) o = { label: v.trim() };
     else if (v && typeof v === "object" && !Array.isArray(v)) {
-      unknownKeys(v, ["label", "value", "then", "color"], where, warn);
+      unknownKeys(v, ["label", "value", "then", "color", "celebrate"], where, warn);
       if (!isStr(v.label)) { err(`${where}: needs a "label", for example {"label": "Yes", "value": "yes"}`); return null; }
       o = { label: v.label.trim() };
       if (v.value !== undefined) { if (isStr(v.value)) o.value = v.value.trim(); else err(`${where}: "value" must be text`); }
       if (v.then !== undefined) { if (v.then === "draw") o.then = "draw"; else err(`${where}: "then" can only be "draw"`); }
       if (v.color !== undefined) { if (isStr(v.color)) o.color = v.color; else err(`${where}: "color" must be a CSS colour like "#3ddc97"`); }
+      if (v.celebrate !== undefined) { if (typeof v.celebrate === "boolean") { if (v.celebrate) o.celebrate = true; } else err(`${where}: "celebrate" must be true or false`); }
     } else { err(`${where}: must be a label string or {"label": ..., "value": ...}`); return null; }
     o.value = o.value || slug(o.label);
     o.slot = slot;

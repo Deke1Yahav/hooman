@@ -5,3 +5,4 @@ BRIEF.md
 tests/out/
 __pycache__/
 *.pyc
+hooman_qr.png

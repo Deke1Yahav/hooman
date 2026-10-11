@@ -180,3 +180,38 @@ details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-
 .tool:disabled { opacity: .35; }
 .editor .sizes input[type=range] { flex: 1; min-width: 80px; accent-color: var(--lime); }
 @media (max-height: 680px) { .tool { height: 40px; } .tool b { font-size: 14px; } }
+
+/* ---------- editor: canvas hint, tool rows, channels ---------- */
+.editor .cwrap { position: relative; flex: 1; min-height: 0; }
+.editor .cwrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ehint { position: absolute; left: 8px; right: 8px; top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; pointer-events: none; }
+.ehint span { font-size: 12px; line-height: 1.3; color: var(--text); background: rgba(13,18,20,.78); padding: 4px 8px; border-radius: 8px; max-width: 100%; }
+.ehint span.warn { color: var(--yellow); }
+.ehint .chip { pointer-events: auto; min-height: 30px; background: var(--ground); }
+.editor .tools.t6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.editor .tools.t5 { grid-template-columns: repeat(5, minmax(0, 1fr)); padding-top: 6px; }
+.editor .tool { font-size: 11px; }
+.editor .sep { width: 1px; height: 22px; background: var(--line); flex: none; margin: 0 2px; }
+.editor .chip.frame[aria-pressed="true"] { border-color: var(--focus); color: var(--focus); }
+.editor .chip.frame[aria-pressed="false"] { opacity: 1; text-decoration: none; }
+@media (max-width: 380px) { .editor .tool { font-size: 10px; } .editor .tool b { font-size: 14px; } }
+
+/* ---------- contrast panel ---------- */
+.cpanel { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; max-width: 640px; margin: 0 auto; background: var(--ground); border: 1px solid var(--line); border-bottom: 0;
+          border-radius: 16px 16px 0 0; padding: 12px var(--gut) calc(env(safe-area-inset-bottom) + 12px); display: grid; gap: 8px; box-shadow: 0 -8px 30px rgba(0,0,0,.5); }
+.cp-head { display: flex; align-items: center; gap: 8px; }
+.cp-head b { flex: 1; }
+.cp-row { display: grid; grid-template-columns: 56px 1fr 64px; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.cp-row input { width: 100%; accent-color: var(--focus); }
+.cp-row .mono { font-size: 12px; text-align: right; color: var(--text); }
+.cp-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+.cp-inv { display: inline-flex; gap: 6px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.seg button { background: transparent; border: 0; padding: 6px 12px; font-size: 12px; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--raise); color: var(--focus); }
+
+/* ---------- dopamine blast ---------- */
+.yay.blast i { animation: burst var(--d, .9s) cubic-bezier(.15, .8, .3, 1) forwards; }
+.yay.blast b { position: absolute; left: 0; top: 0; translate: -50% -50%; font-size: 56px; animation: boom .9s ease-out forwards; }
+@keyframes burst { 60% { opacity: 1; } to { transform: translate(var(--x), var(--y)) rotate(var(--r)); opacity: 0; } }
+@keyframes boom { 0% { scale: .2; opacity: 0; } 25% { scale: 1.25; opacity: 1; } 70% { scale: 1; opacity: 1; } to { scale: 1.1; opacity: 0; } }

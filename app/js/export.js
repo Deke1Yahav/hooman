@@ -4,7 +4,7 @@ import * as store from "./store.js";
 import { writeZip } from "./zip.js";
 import { answerDefs } from "./deck.js";
 
-export const APP_VERSION = "0.1.1";
+export const APP_VERSION = "0.2.0";
 const csvCell = (v) => {
   const s = v === undefined || v === null ? "" : String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -28,6 +28,7 @@ export async function buildExport(rec) {
       files.push({ name: mask, data: a.mask });
       item.overlays = [{ source: "hooman", mask }];
       if (a.objects) item.objects = a.objects;
+      if (a.frame !== undefined && card.frames.length > 1) item.frame = a.frame;
     }
     json.push(item);
     rows.push([card.id, image, a.answer, item.label, a.at, a.ms, item.changes, mask].map(csvCell).join(","));

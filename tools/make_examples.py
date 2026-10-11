@@ -76,7 +76,8 @@ def shapes_deck():
         path = f"img/{i + 1:03d}.jpg"
         files[path] = jpg_bytes(bg)
         cards.append(path)
-    deck = {"hooman": 1, "id": "example-circles", "title": "Example · Is it a circle?", "question": "Is this a circle?", "cards": cards}
+    deck = {"hooman": 1, "id": "example-circles", "title": "Example · Is it a circle?", "question": "Is this a circle?",
+            "answers": {"right": {"label": "Yes", "celebrate": True}, "left": "No", "up": "Unsure"}, "cards": cards}
     write_deck("circles.hooman.zip", deck, files)
 
 
@@ -222,7 +223,7 @@ def boxes_deck():
         "hooman": 1, "id": "example-boxes", "title": "Example · Check a detector",
         "question": "Is the detector's label right?",
         "sources": {"detector": {"label": "Detector", "color": "#4fc3f7"}},
-        "answers": {"right": "Correct", "left": "Wrong label", "up": "Unsure"},
+        "answers": {"right": {"label": "Correct", "celebrate": True}, "left": "Wrong label", "up": "Unsure"},
         "buttons": ["Box too loose", "Box too tight"],
         "shuffle": True,
         "cards": cards,
@@ -327,7 +328,62 @@ def fruit_deck():
     write_deck("fruit.hooman.zip", deck, files)
 
 
+# ---------------------------------------------------------------- 6. raw 16-bit microscopy, 2 channels
+def nuclei_deck():
+    """Dim 12-bit nuclei + a membrane channel, saved as raw 16-bit PNGs; a model mask with typical mistakes."""
+    files, cards = {}, []
+    S = 320
+    yy, xx = np.mgrid[0:S, 0:S]
+    for f_i in range(3):
+        r = np.random.default_rng(500 + f_i)
+        gt = np.zeros((S, S), np.uint16)
+        centers = []
+        k = 0
+        while k < 14:
+            cx, cy = r.uniform(25, S - 25, 2)
+            if any(math.hypot(cx - a, cy - b) < 30 for a, b in centers):
+                continue
+            a, b, t = r.uniform(11, 17), r.uniform(9, 13), r.uniform(0, math.pi)
+            X, Y = (xx - cx) * math.cos(t) + (yy - cy) * math.sin(t), -(xx - cx) * math.sin(t) + (yy - cy) * math.cos(t)
+            m = ((X / a) ** 2 + (Y / b) ** 2 <= 1) & (gt == 0)
+            k += 1; gt[m] = k; centers.append((cx, cy))
+        # nuclei: dim (a 12-bit camera, ~300 counts over a 200 background), textured
+        nuc = 200 + 30 * r.standard_normal((S, S))
+        tex = np.asarray(Image.fromarray((r.random((S // 4, S // 4)) * 255).astype(np.uint8)).resize((S, S), Image.BICUBIC), float) / 255
+        nuc += (gt > 0) * (220 + 160 * tex)
+        from scipy.ndimage import gaussian_filter
+        nuc = gaussian_filter(nuc, 1.2)
+        # membrane: rings around each nucleus
+        mem = 150 + 20 * r.standard_normal((S, S))
+        for (cx, cy) in centers:
+            d = np.hypot(xx - cx, yy - cy)
+            mem += 260 * np.exp(-((d - 21) ** 2) / 8)
+        # model: two touching nuclei merged, one missed, one split
+        model = gt.copy()
+        model[model == 2] = 1
+        model[model == 5] = 0
+        ys, xs = np.nonzero(gt == 8)
+        if len(xs):
+            left = xs < xs.mean(); model[ys[left], xs[left]] = 100
+        name = f"field{f_i + 1}"
+        files[f"img/{name}_dapi.png"] = png_bytes(np.clip(nuc, 0, 4095).astype(np.uint16))
+        files[f"img/{name}_membrane.png"] = png_bytes(np.clip(mem, 0, 4095).astype(np.uint16))
+        files[f"model/{name}.png"] = png_bytes(model)
+        cards.append({"id": name, "frames": [{"image": f"img/{name}_dapi.png", "name": "DAPI"}, {"image": f"img/{name}_membrane.png", "name": "Membrane"}],
+                      "info": f"{name} · raw 12-bit in 16-bit PNG", "overlays": [{"source": "model", "mask": f"model/{name}.png"}]})
+    deck = {
+        "hooman": 1, "id": "example-nuclei", "title": "Example · Fix the nuclei (16-bit)",
+        "question": "Did the model segment every nucleus right?",
+        "help": "Raw 16-bit images: the app picks the contrast (◐ to change it). If anything is wrong, swipe up: Pick or Start from model, then Cut merged nuclei, Merge split ones, Wand the missed ones.",
+        "sources": {"model": {"label": "Model", "color": "#4fc3f7"}},
+        "answers": {"right": {"label": "All right", "value": "ok", "celebrate": True}, "up": {"label": "Fix it", "value": "fixed", "then": "draw"}, "down": "Unsure"},
+        "cards": cards,
+    }
+    write_deck("nuclei.hooman.zip", deck, files)
+
+
 if __name__ == "__main__":
+    nuclei_deck()
     fruit_deck()
     shapes_deck()
     duel_deck()
@@ -339,6 +395,7 @@ if __name__ == "__main__":
         {"file": "boxes.hooman.zip", "title": "Check a detector", "about": "Boxes with labels and scores, plus extra answer buttons."},
         {"file": "timelapse.hooman.zip", "title": "Follow a track", "about": "Three frames per card: does the tracker stay on one cell?"},
         {"file": "fruit.hooman.zip", "title": "Mask the fruit", "about": "No question: draw masks with classes (apple, orange, leaf). Shows the mask editor."},
+        {"file": "nuclei.hooman.zip", "title": "Fix the nuclei (16-bit)", "about": "Raw 16-bit microscopy, 2 channels, auto contrast. Fix a model's merged, split and missed nuclei."},
     ]
     (OUT / "index.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
     print("index.json written")

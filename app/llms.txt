@@ -41,6 +41,7 @@ Rules for the zip:
 - `deck.json` sits at the top of the zip (one wrapping folder is tolerated).
 - Paths are relative to `deck.json`, use `/`, and are case-sensitive.
 - Images are JPEG, PNG, WebP or GIF. **No TIFF.** Convert it first (recipe 7.4).
+- **16-bit greyscale PNG is welcome** (raw microscopy). The app sets the contrast automatically, and the hooman can change black/white points, gamma and invert per channel.
 - Keep the long side of each image at 2048 px or less. Phones are slow with bigger images.
 - Any path may instead be an `https://` URL. The app downloads it once at import, so the host must allow cross-origin requests (GitHub raw and gists do).
 
@@ -77,6 +78,7 @@ Rules for the zip:
 - `value` is what gets saved. The default is the label in lowercase, with spaces turned into `_`.
 - `then: "draw"` opens the mask editor after this answer. The saved answer includes the hooman's mask, and the editor can start from any overlay's mask.
 - `color` sets a CSS colour. By default, an answer whose `value` equals a source name takes that source's colour, so the "A" button is the same colour as A's outlines.
+- `celebrate: true` fires a confetti blast when the hooman picks this answer, a little dopamine for the answer you hope to see (such as "model is right"). The hooman can also switch it on in the app.
 
 `buttons` holds extra answers that have no swipe direction. It takes the same string or object items, at most 6:
 
@@ -139,7 +141,15 @@ Without `sources`, colours are assigned in order of first appearance: red, green
 
 ## 5. Annotate mode and the mask editor
 
-Leave `question` out, and every card opens straight in the mask editor. The hooman draws objects (brush, eraser, lasso fill, new object) and taps DONE. Optional `classes` adds a class picker:
+Leave `question` out, and every card opens straight in the mask editor. Optional `classes` adds a class picker.
+
+The editor's tools:
+- **To draw:** brush, contour brush (draw an outline and the inside fills), polygon (tap the corners), magic wand (tap a cell and it fills the connected bright or dark area), pick (tap inside a model's outline to take that object) and eraser.
+- **To fix:** cut (a line splits an object in two), merge, fill holes, delete and move.
+- It also has frame/channel buttons, contrast, and undo/redo.
+- Every object is a separate label, and painting never spills into a neighbouring object.
+
+An annotate deck looks like this:
 
 ```json
 {"hooman": 1, "title": "Mask my plants", "classes": ["leaf", "flower", {"value": "pot", "color": "#f2c14e"}], "cards": ["img/1.jpg"]}
@@ -173,6 +183,7 @@ In the app, the hooman taps **Export**. They get `<deck id>.answers.zip`, which 
 
 - `masks/<card id>.png` holds the hooman's masks, in the same label-image format as the input. A `/` in a card ID becomes `__` in the file name.
 - `objects` lists each label value in that mask, with its class when the deck has `classes`.
+- `frame` (cards with `frames`) is the frame that was on screen when the drawing started.
 
 Join the results back to your data on `card` (the card ID).
 
@@ -216,7 +227,9 @@ For each object in a label image, add a card for the same image with `"focus": [
 
 ### 7.4 From TIFF or 16-bit microscopy
 
-Convert to an 8-bit PNG with a percentile stretch. A 16-bit label TIFF can stay 16-bit as a PNG.
+Greyscale data can stay raw: save it as a **16-bit PNG**, and the app adjusts the contrast:
+`Image.fromarray(tifffile.imread("x.tif").astype(np.uint16)).save("x.png")`.
+For colour, or to fix the contrast yourself, convert to an 8-bit PNG with a percentile stretch. A 16-bit label TIFF can stay 16-bit as a PNG.
 
 ```python
 import numpy as np; from PIL import Image

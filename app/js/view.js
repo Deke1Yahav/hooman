@@ -4,24 +4,75 @@
 import * as store from "./store.js";
 import { decodeLabelPNG } from "./png.js";
 
-const cache = new Map();                       // key -> Promise<value>; small LRU
-const CACHE_MAX = 60;
+// Small LRU caches; big microscopy frames get the smallest budget.
+const LIMITS = { f: 8, l: 12, m: 24 };
+const caches = { f: new Map(), l: new Map(), m: new Map() };
 function cached(key, make) {
+  const kind = key[0], cache = caches[kind];
   if (cache.has(key)) { const v = cache.get(key); cache.delete(key); cache.set(key, v); return v; }
   const v = make();
   v.catch(() => cache.delete(key));
   cache.set(key, v);
-  while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+  while (cache.size > LIMITS[kind]) cache.delete(cache.keys().next().value);
   return v;
 }
+export const canvas2d = (w, h) => (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h) : Object.assign(document.createElement("canvas"), { width: w, height: h }));
 
-export function bitmap(deckKey, path) {
-  return cached(`b|${deckKey}|${path}`, async () => {
+// A frame's pixels: {w, h, bits, bmp | gray}. Raw 16-bit grey PNGs (microscopy) are decoded here,
+// because the browser would crush them to 8 bits; the hooman's contrast settings then pick the window.
+export function frameSource(deckKey, path) {
+  return cached(`f|${deckKey}|${path}`, async () => {
     const blob = await store.getFile(deckKey, path);
     if (!blob) throw new Error(`missing file ${path}`);
-    return createImageBitmap(blob);
+    const head = new Uint8Array(await blob.slice(0, 26).arrayBuffer());
+    if (head[0] === 137 && head[1] === 80 && head[24] === 16 && (head[25] === 0 || head[25] === 4)) {
+      const d = await decodeLabelPNG(await blob.arrayBuffer());
+      return { w: d.width, h: d.height, bits: 16, gray: d.labels };
+    }
+    const bmp = await createImageBitmap(blob);
+    return { w: bmp.width, h: bmp.height, bits: 8, bmp };
   });
 }
+
+// One intensity per pixel (16-bit value, or 8-bit luminance), for contrast and the magic wand.
+export function intensity(src) {
+  if (src.int) return src.int;
+  if (src.gray) return (src.int = src.gray);
+  const c = canvas2d(src.w, src.h), ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(src.bmp, 0, 0);
+  const d = (src.rgba = ctx.getImageData(0, 0, src.w, src.h).data), out = new Uint8Array(src.w * src.h);
+  for (let i = 0, j = 0; i < out.length; i++, j += 4) out[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+  return (src.int = out);
+}
+function percentile(src) {
+  if (src.pct) return src.pct;
+  const I = intensity(src), bins = src.bits === 16 ? 65536 : 256, hist = new Float64Array(bins);
+  for (let i = 0; i < I.length; i++) hist[I[i]]++;
+  for (let v = 1; v < bins; v++) hist[v] += hist[v - 1];
+  const n = I.length;
+  return (src.pct = (p) => { const want = (p / 100) * n; let lo = 0, hi = bins - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (hist[m] < want) lo = m + 1; else hi = m; } return lo; });
+}
+export const AUTO = { min: 0.5, max: 99.8, gamma: 1, invert: false };
+
+// What to draw for a frame: the plain bitmap, or a contrast-adjusted copy (black/white points are percentiles).
+export function rendered(src, params) {
+  if (!params && src.bmp) return src.bmp;
+  const p = params || AUTO, key = `${p.min}|${p.max}|${p.gamma}|${p.invert ? 1 : 0}`;
+  if (src.rkey === key) return src.rcanvas;
+  const I = intensity(src), pct = percentile(src);
+  let lo = pct(p.min), hi = pct(p.max);
+  if (hi <= lo) hi = lo + 1;
+  const n = src.bits === 16 ? 65536 : 256, lut = new Uint8Array(n), g = p.gamma || 1;
+  for (let v = 0; v < n; v++) { let t = (v - lo) / (hi - lo); t = t < 0 ? 0 : t > 1 ? 1 : Math.pow(t, g); lut[v] = Math.round((p.invert ? 1 - t : t) * 255); }
+  const c = src.rcanvas || canvas2d(src.w, src.h), ctx = c.getContext("2d");
+  const img = ctx.createImageData(src.w, src.h), o = img.data;
+  if (src.gray) for (let i = 0, j = 0; i < I.length; i++, j += 4) { const v = lut[I[i]]; o[j] = v; o[j + 1] = v; o[j + 2] = v; o[j + 3] = 255; }
+  else { const d = src.rgba; for (let j = 0; j < d.length; j += 4) { o[j] = lut[d[j]]; o[j + 1] = lut[d[j + 1]]; o[j + 2] = lut[d[j + 2]]; o[j + 3] = 255; } }
+  ctx.putImageData(img, 0, 0);
+  src.rcanvas = c; src.rkey = key;
+  return c;
+}
+
 export function labels(deckKey, path) {
   return cached(`l|${deckKey}|${path}`, async () => {
     const blob = await store.getFile(deckKey, path);
@@ -55,7 +106,7 @@ export function outlinePath({ width: w, height: h, labels: L }, value) {
 }
 
 function fillCanvas({ width: w, height: h, labels: L }, value, color) {
-  const c = new OffscreenCanvas(w, h), ctx = c.getContext("2d");
+  const c = canvas2d(w, h), ctx = c.getContext("2d");
   ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1);
   const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
   const img = ctx.createImageData(w, h), d = img.data;
@@ -97,14 +148,14 @@ export class CardCanvas {
     const t = ++this.token;
     this.rec = rec; this.card = card; this.frame = frame; this.hidden = hidden;
     const key = rec.key, colors = Object.fromEntries(rec.deck.sources.map((s) => [s.name, s.color]));
-    const bitmaps = await Promise.all(card.frames.map((f) => bitmap(key, f.path)));
+    const sources = await Promise.all(card.frames.map((f) => frameSource(key, f.path)));
     const layers = await Promise.all(card.overlays.map(async (o) => {
       const color = colors[o.source] || "#fff";
       if (o.shape !== "mask") return { o, color };
       return { o, color, ...(await maskLayer(key, o.mask, o.value, color, o.style === "fill")) };
     }));
     if (t !== this.token) return false;
-    this.bitmaps = bitmaps; this.layers = layers;
+    this.sources = sources; this.layers = layers;
     this.resize(rect || viewRect(card));
     return true;
   }
@@ -130,12 +181,13 @@ export class CardCanvas {
   setHidden(set) { this.hidden = set; this.draw(); }
 
   draw() {
-    if (!this.bitmaps) return;
+    if (!this.sources) return;
     const { ctx, s, ox, oy, dpr } = this, card = this.card;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
     ctx.imageSmoothingEnabled = s < 2; ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(this.bitmaps[this.frame] || this.bitmaps[0], ox, oy, card.w * s, card.h * s);
+    const src = this.sources[this.frame] || this.sources[0];
+    ctx.drawImage(rendered(src, this.display ? this.display(this.frame) : null), ox, oy, card.w * s, card.h * s);
     const labelsToDraw = [];
     for (const L of this.layers) {
       const o = L.o;

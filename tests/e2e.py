@@ -75,6 +75,7 @@ def swipe(page, dx, dy):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")
     OUT.mkdir(parents=True, exist_ok=True)
     srv = serve()
     base = f"http://127.0.0.1:{srv.server_address[1]}/"
@@ -127,7 +128,7 @@ def main():
             page.mouse.move(cx - 60 + i * 10, cy + 40 + (i % 3) * 4)
         page.mouse.up(); page.wait_for_timeout(150)
         page.locator("[data-e=new]").click()
-        page.locator("[data-tool=lasso]").click()
+        page.locator("[data-tool=contour]").click()
         page.mouse.move(cx + 40, cy - 80); page.mouse.down()
         for x, y in [(cx + 90, cy - 80), (cx + 90, cy - 30), (cx + 40, cy - 30), (cx + 40, cy - 78)]:
             page.mouse.move(x, y, steps=5)
@@ -364,6 +365,115 @@ def main():
         page.screenshot(path=OUT / "20_touch_editor.png")
         page.locator("[data-e=cancel]").click(); page.locator("[data-e=cancel]").click(); page.wait_for_timeout(200)
         check(page.locator(".editor").count() == 0, "cancel twice discards the drawing")
+
+        print("16-bit microscopy: auto contrast, contrast panel, cell tools")
+        import numpy as np
+        from PIL import Image
+        from scipy import ndimage
+        with zipfile.ZipFile(ROOT / "app" / "examples" / "nuclei.hooman.zip") as z:
+            model = np.asarray(Image.open(io.BytesIO(z.read("model/field1.png"))))
+            dapi = np.asarray(Image.open(io.BytesIO(z.read("img/field1_dapi.png")))).astype(float)
+        cen = lambda m: (float(np.nonzero(m)[1].mean()) + 0.5, float(np.nonzero(m)[0].mean()) + 0.5)
+        sm = ndimage.gaussian_filter(dapi, 1.5)
+        blobs, nb = ndimage.label(sm > (np.percentile(sm, 50) + np.percentile(sm, 99.5)) / 2)
+        missed = [k for k in range(1, nb + 1) if (blobs == k).sum() > 60 and not (model[blobs == k] > 0).any()]
+        busy = ndimage.binary_dilation((model > 0) | (blobs > 0), iterations=6)
+        free = [(x, y) for y in range(30, 290, 10) for x in range(30, 290, 10) if not busy[y - 22:y + 22, x - 22:x + 22].any()]
+        n_model = len(np.unique(model)) - 1
+
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+        page.get_by_role("button", name="Try an example").click()
+        page.locator(".example", has_text="Fix the nuclei").click()
+        expect(page.locator(".sheet h3")).to_contain_text("Ready", timeout=20000)
+        page.get_by_role("button", name="Open the deck").click()
+        page.wait_for_selector(".card canvas"); page.wait_for_timeout(500)
+        mean = "(() => { const c = document.querySelector('%s'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i]; return s / (d.length / 4); })()"
+        p99 = "(() => { const c = document.querySelector('.card canvas'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; const v = []; for (let i = 0; i < d.length; i += 4) v.push(d[i]); v.sort((a, b) => a - b); return v[Math.floor(v.length * 0.99)]; })()"
+        bright0, top = page.evaluate(mean % ".card canvas"), page.evaluate(p99)
+        check(top > 180, f"raw 16-bit images get auto contrast (nuclei reach {top}/255; the browser alone would show about 2/255)")
+        page.screenshot(path=OUT / "22_nuclei_card.png")
+        page.locator("[data-act=contrast]").first.click()
+        page.wait_for_selector(".cpanel")
+        page.locator(".cpanel [data-k=max]").fill("70"); page.wait_for_timeout(300)
+        bright1 = page.evaluate(mean % ".card canvas")
+        check(bright1 > bright0 + 10, f"lowering the white point brightens the image ({bright0:.0f} -> {bright1:.0f})")
+        check(page.locator(".cpanel .seg button").count() == 2, "contrast can apply to all frames or one channel")
+        page.screenshot(path=OUT / "23_contrast_panel.png")
+        page.locator(".cpanel [data-cp=reset]").click(); page.wait_for_timeout(200)
+        page.locator(".cpanel [data-cp=close]").click()
+
+        page.keyboard.press("ArrowUp")
+        page.wait_for_selector(".editor canvas"); page.wait_for_timeout(500)
+        dbg = lambda: page.evaluate("document.querySelector('.editor')._debug()")
+        def scr(x, y):
+            d, r = dbg(), page.locator(".editor canvas").bounding_box()
+            return r["x"] + d["view"]["ox"] + x * d["view"]["s"], r["y"] + d["view"]["oy"] + y * d["view"]["s"]
+        def tap(x, y): page.mouse.click(*scr(x, y)); page.wait_for_timeout(150)
+        check(page.locator(".editor [data-frame]").count() == 2, "the editor has channel buttons")
+        page.locator(".editor [data-frame='1']").click(); page.wait_for_timeout(150)
+        check(dbg()["frame"] == 1, "switching to the membrane channel in the editor")
+        page.locator(".editor [data-frame='0']").click()
+
+        page.locator("[data-tool=pick]").click()
+        tap(*cen(model == 3))
+        d = dbg(); check(d["objects"] == 1 and d["pixels"] == int((model == 3).sum()), f"pick takes the model's object exactly ({d['pixels']} px)")
+        page.locator("[data-e=clear]").click()
+        page.locator("[data-from=model]").click(); page.wait_for_timeout(300)
+        d = dbg(); check(d["objects"] == n_model, f"start from model copies all {n_model} objects ({d['objects']})")
+
+        page.locator("[data-tool=merge]").click()
+        tap(*cen(model == 8)); tap(*cen(model == 100))
+        check(dbg()["objects"] == n_model - 1, "merge joins the two halves of a split nucleus")
+        cx, cy = cen((model == 8) | (model == 100))
+        page.locator("[data-tool=cut]").click()
+        page.mouse.move(*scr(cx, cy - 22)); page.mouse.down(); page.mouse.move(*scr(cx, cy + 22), steps=10); page.mouse.up(); page.wait_for_timeout(200)
+        check(dbg()["objects"] == n_model, "cut splits it again")
+
+        check(len(missed) >= 1, f"the test found the nucleus the model missed ({len(missed)})")
+        if missed:
+            page.locator("[data-tool=wand]").click()
+            px0 = dbg()["pixels"]
+            tap(*cen(blobs == missed[0]))
+            d = dbg(); area = d["pixels"] - px0
+            check(d["objects"] == n_model + 1 and 80 < area < 1500, f"the wand fills the missed nucleus ({area} px)")
+            page.locator("[data-size]").fill("0.6"); page.wait_for_timeout(200)
+            area2 = dbg()["pixels"] - px0
+            check(dbg()["objects"] == n_model + 1 and area2 > area, f"the slider grows the wand region ({area} -> {area2} px)")
+            page.screenshot(path=OUT / "24_wand.png")
+
+        check(len(free) >= 2, "the test found empty background")
+        if len(free) >= 2:
+            n1, px1 = dbg()["objects"], dbg()["pixels"]
+            page.locator("[data-tool=contour]").click()
+            (fx, fy), r = free[0], 12
+            ring = [scr(fx + r * np.cos(t), fy + r * np.sin(t)) for t in np.linspace(0, 2 * np.pi, 24)]
+            page.mouse.move(*ring[0]); page.mouse.down()
+            for p_ in ring[1:]: page.mouse.move(*p_)
+            page.mouse.up(); page.wait_for_timeout(200)
+            d = dbg(); check(d["objects"] == n1 + 1 and d["pixels"] - px1 > 300, f"a closed contour fills its inside ({d['pixels'] - px1} px)")
+            page.locator("[data-tool=polygon]").click()
+            (gx, gy) = free[-1]
+            for (x, y) in [(gx - 10, gy - 10), (gx + 10, gy - 10), (gx + 10, gy + 10), (gx - 10, gy + 10)]:
+                tap(x, y)
+            check(page.locator("[data-e=polyfill]").count() == 1, "the polygon offers ✓ Fill while open")
+            tap(gx - 10, gy - 10)
+            d2 = dbg(); check(d2["objects"] == n1 + 2 and 300 < d2["pixels"] - d["pixels"] < 500, f"tapping the first corner fills the polygon ({d2['pixels'] - d['pixels']} px)")
+            page.screenshot(path=OUT / "25_tools.png")
+            page.locator("[data-tool=delete]").click(); page.wait_for_timeout(150)
+            check(dbg()["objects"] == n1 + 1, "delete removes the selected object")
+            page.locator("[data-tool=fill]").click(); page.wait_for_timeout(150)
+            check(page.locator(".ehint span").inner_text() != "", "fill holes reports what it did")
+        page.locator("[data-e=done]").click(); page.wait_for_timeout(600)
+        check(page.locator(".editor").count() == 0 and count(page).startswith("1 /"), "the fixed mask is saved as the answer")
+
+        print("dopamine")
+        page.goto(base + "#/deck/example-circles"); page.wait_for_selector(".card canvas"); page.wait_for_timeout(300)
+        page.keyboard.press("ArrowRight"); page.wait_for_timeout(120)
+        check(page.locator(".yay.blast").count() == 1, "a celebrate answer fires the confetti blast")
+        page.screenshot(path=OUT / "26_blast.png")
+        page.wait_for_timeout(1600)
+        page.keyboard.press("ArrowLeft"); page.wait_for_timeout(150)
+        check(page.locator(".yay.blast").count() == 0, "other answers don't")
 
         print("small phones")
         for w, h in [(360, 640), (375, 667), (390, 720)]:

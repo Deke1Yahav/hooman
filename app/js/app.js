@@ -2,10 +2,12 @@
 
 import * as store from "./store.js";
 import { importBlob, importURL, saveDeck } from "./importer.js";
-import { CardCanvas, viewRect, bitmap, maskLayer } from "./view.js";
+import { CardCanvas, viewRect, frameSource, maskLayer, rendered } from "./view.js";
 import { answerDefs, DIRS, slug } from "./deck.js";
 import { buildExport, shareOrDownload, APP_VERSION } from "./export.js";
 import { openEditor, editorOpen } from "./editor.js";
+import { prefs } from "./prefs.js";
+import { displayFor, openContrast, closeContrast } from "./contrast.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -14,10 +16,6 @@ const app = $("#app");
 const ARROW = { right: "→", left: "←", up: "↑", down: "↓", button: "" };
 const SLOT_NAME = { right: "swipe right", left: "swipe left", up: "swipe up", down: "swipe down", button: "button" };
 
-const prefs = {
-  get(k, d) { try { const v = localStorage.getItem("hooman:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem("hooman:" + k, JSON.stringify(v)); } catch {} },
-};
 
 // ---------------------------------------------------------------- toast, sheets, clipboard
 let toastTimer;
@@ -53,6 +51,23 @@ async function copyText(text) {
   }
 }
 
+// The dopamine answer: a burst from the card, plus a short buzz on phones that have one.
+function blast(color) {
+  const box = document.createElement("div"), cols = [color, "#3ddc97", "#f2c14e", "#4fc3f7", "#ff8fab", "#c6ff3d", "#b48cff", "#ffffff"];
+  const card = S && S.cardEl ? S.cardEl.getBoundingClientRect() : null;
+  box.className = "yay blast";
+  if (card) { box.style.left = `${card.left + card.width / 2}px`; box.style.top = `${card.top + card.height / 2}px`; }
+  let h = "";
+  for (let i = 0; i < 90; i++) {
+    const t = Math.random() * Math.PI * 2, r = 80 + Math.random() * 220;
+    h += `<i style="--x:${Math.round(Math.cos(t) * r)}px;--y:${Math.round(Math.sin(t) * r * 0.8 + 120)}px;--r:${Math.round(Math.random() * 900 - 450)}deg;--d:${(0.7 + Math.random() * 0.6).toFixed(2)}s;background:${cols[i % cols.length]};width:${6 + (i % 4) * 2}px;height:${8 + (i % 3) * 3}px"></i>`;
+  }
+  box.innerHTML = h + `<b style="color:${color}">🎉</b>`;
+  document.body.appendChild(box);
+  try { navigator.vibrate && navigator.vibrate([18, 40, 28]); } catch {}
+  setTimeout(() => box.remove(), 1500);
+}
+
 function confetti() {
   const box = document.createElement("div"), cols = ["#3ddc97", "#f2c14e", "#4fc3f7", "#ff8fab", "#c6ff3d", "#b48cff"];
   box.className = "yay";
@@ -67,7 +82,7 @@ function confetti() {
 
 // ---------------------------------------------------------------- routing
 let cleanup = [];
-function leaveScreen() { cleanup.forEach((f) => f()); cleanup = []; S = null; stopPlay(); closeZoom(); }
+function leaveScreen() { cleanup.forEach((f) => f()); cleanup = []; S = null; stopPlay(); closeZoom(); closeContrast(); }
 
 function parseHash() {
   const h = location.hash.replace(/^#/, "") || "/";
@@ -293,7 +308,7 @@ function buildDeckScreen() {
     <div class="pbar"><i id="pbar"></i></div>
     <div class="tally" id="tally"></div>
     <p class="question" id="question"></p>
-    ${deck.sources.length ? `<div class="chips" id="chips">${deck.sources.map((s) => `<button class="chip" data-src="${esc(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}</div>` : ""}
+    <div class="chips" id="chips"><button class="chip" data-act="contrast" aria-label="Contrast">◐</button>${deck.sources.map((s) => `<button class="chip" data-src="${esc(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}</div>
     <div class="stage" id="stage"></div>
     <div class="answers" id="answers"></div>
     <div class="hint" id="hint"></div>
@@ -301,6 +316,9 @@ function buildDeckScreen() {
   renderAnswerButtons();
   updateChips();
   app.onclick = onDeckClick;
+  const onContrast = () => { if (S && S.view) S.view.draw(); if (Z) Z.view.draw(); };
+  window.addEventListener("hooman:contrast", onContrast);
+  cleanup.push(() => window.removeEventListener("hooman:contrast", onContrast));
   const onResize = () => { clearTimeout(S && S.rz); if (S) S.rz = setTimeout(layoutCard, 120); };
   window.addEventListener("resize", onResize);
   document.addEventListener("keydown", onDeckKey);
@@ -370,7 +388,7 @@ function layoutCard() {
   S.cardEl.style.width = `${w + 2}px`;
   const cv = $("canvas", S.cardEl);
   cv.style.width = `${w}px`; cv.style.height = `${h}px`;
-  if (S.view && S.view.bitmaps) S.view.resize(viewRect(card));
+  if (S.view && S.view.sources) S.view.resize(viewRect(card));
 }
 
 async function showCard() {
@@ -395,6 +413,7 @@ async function showCard() {
   attachSwipe(el);
   layoutCard();
   S.view = new CardCanvas($("canvas", el));
+  S.view.display = displayFor(S.key, card);
   try { await S.view.show(S.rec, card, { hidden: S.hidden }); }
   catch (e) { console.error(e); toast(`Could not show this card: ${e.message}`, 4000); }
   S.shownAt = performance.now();
@@ -409,7 +428,7 @@ function prefetch() {
     i = (i + 1) % S.order.length;
     const c = S.cardsById.get(S.order[i]);
     if (!c || S.answers.has(c.id)) continue;
-    c.frames.forEach((f) => bitmap(S.key, f.path).catch(() => {}));
+    c.frames.forEach((f) => frameSource(S.key, f.path).catch(() => {}));
     const colors = Object.fromEntries(S.rec.deck.sources.map((s) => [s.name, s.color]));
     c.overlays.filter((o) => o.shape === "mask").forEach((o) => maskLayer(S.key, o.mask, o.value, colors[o.source], o.style === "fill").catch(() => {}));
   }
@@ -510,6 +529,7 @@ async function answer(def, from) {
     if (!drawn) { S.busy = false; return; }   // cancelled: no answer
   }
   if (!(await saveAnswer(card, def, prev, drawn))) return;
+  if (def.celebrate) blast(def.color);
   await flyOut(def, drawn ? null : from);
   S.busy = false;
   advance();
@@ -628,6 +648,7 @@ function onDeckClick(e) {
   const act = t.dataset.act;
   if (act === "back") return S.revisit ? history.back() : go("#/");
   if (act === "undo") return undo();
+  if (act === "contrast") return contrastPanel();
   if (act === "draw") return annotateCard();
   if (act === "skip") { const c = currentCard(); if (c) { S.pos = nextUnanswered(S.pos); if (S.order[S.pos] === c.id) toast("This is the last open card"); showCard(); } return; }
   if (act === "menu") return deckMenu();
@@ -662,6 +683,7 @@ async function openZoom() {
   el.className = "zoom";
   el.innerHTML = `<div class="bar">
       <button class="ghost" data-z="close">✕ Close</button>
+      <button class="chip" data-act="contrast" aria-label="Contrast">◐</button>
       ${deck.sources.map((s) => `<button class="chip" data-zsrc="${esc(s.name)}" aria-pressed="${!S.hidden.has(s.name)}" style="color:${esc(s.color)}"><i></i><span style="color:var(--text)">${esc(s.label)}</span></button>`).join("")}
     </div>
     <canvas></canvas>
@@ -669,10 +691,12 @@ async function openZoom() {
       <p class="hint" style="margin:6px 0 0">pinch or scroll to zoom · drag to move · double-tap to zoom in</p></div>`;
   document.body.appendChild(el);
   Z = { el, view: new CardCanvas($("canvas", el), { interactive: true }) };
+  Z.view.display = displayFor(S.key, card);
   el.onclick = (e) => {
     const t = e.target.closest("[data-z],[data-zsrc],[data-zframe],[data-act]");
     if (!t) return;
     if (t.dataset.z === "close") closeZoom();
+    else if (t.dataset.act === "contrast") contrastPanel();
     else if (t.dataset.zsrc !== undefined) toggleSource(t.dataset.zsrc);
     else if (t.dataset.zframe !== undefined) { stopPlay(); setFrame(+t.dataset.zframe); }
     else if (t.dataset.act === "play") togglePlay();
@@ -681,6 +705,12 @@ async function openZoom() {
   window.addEventListener("resize", onR);
   Z.off = () => window.removeEventListener("resize", onR);
   await Z.view.show(S.rec, card, { frame: S.frame, hidden: S.hidden });
+}
+function contrastPanel() {
+  const card = currentCard();
+  if (!card || !S.view || !S.view.sources) return;
+  const src = S.view.sources[S.frame] || S.view.sources[0];
+  openContrast(S.key, card.frames.length > 1 ? card.frames[S.frame].name || "" : "", src.bits === 16);
 }
 function closeZoom() {
   if (!Z) return;
@@ -714,7 +744,7 @@ function deckMenu() {
 function helpSheet(rec) {
   defsNow();
   const deck = rec.deck;
-  const lines = S.allDefs.filter((d) => !d.hidden).map((d) => `<li><b style="color:${esc(d.color)}">${esc(d.label)}</b>: ${SLOT_NAME[d.slot]}${d.slot === "button" ? "" : ` or the ${ARROW[d.slot]} button`}${d.then === "draw" ? ", then draw the right mask" : ""}</li>`).join("");
+  const lines = S.allDefs.filter((d) => !d.hidden).map((d) => `<li><b style="color:${esc(d.color)}">${esc(d.label)}</b>: ${SLOT_NAME[d.slot]}${d.slot === "button" ? "" : ` or the ${ARROW[d.slot]} button`}${d.then === "draw" ? ", then draw the right mask" : ""}${d.celebrate ? " 🎉" : ""}</li>`).join("");
   openSheet(`<h3>How this deck works</h3>
     ${deck.help ? `<p style="color:var(--text);white-space:pre-wrap">${esc(deck.help)}</p>` : ""}
     <p><b>${esc(deck.question || "")}</b></p>
@@ -745,7 +775,8 @@ function answerEditor(rec) {
         <input type="text" data-i="${i}" data-f="label" value="${esc(d.label)}" aria-label="Label">
         <button class="icon-btn" data-hide="${i}" aria-label="${d.hidden ? "Show" : "Hide"}">${d.hidden ? "↺" : "✕"}</button>
         <div class="meta"><label>value <input type="text" data-i="${i}" data-f="value" value="${esc(d.value)}" ${used.has(d.value) || d.locked ? "readonly title=\"already used\"" : ""}></label>
-          <label><input type="checkbox" data-i="${i}" data-f="then" ${d.then === "draw" ? "checked" : ""}> then draw</label></div>
+          <label><input type="checkbox" data-i="${i}" data-f="then" ${d.then === "draw" ? "checked" : ""}> then draw</label>
+          <label><input type="checkbox" data-i="${i}" data-f="celebrate" ${d.celebrate ? "checked" : ""}> 🎉 confetti</label></div>
       </div>`).join("")}</div>
     <div class="stack"><button class="btn quiet" data-add>＋ Add an answer</button></div>
     <div class="row"><button class="btn" data-save>Save</button><button class="btn quiet" data-reset>Reset to the deck's</button></div>
@@ -760,6 +791,7 @@ function answerEditor(rec) {
     else if (f === "value") d.value = t.value.trim();
     else if (f === "slot") d.slot = t.value;
     else if (f === "then") d.then = t.checked ? "draw" : undefined;
+    else if (f === "celebrate") d.celebrate = t.checked || undefined;
   });
   sh.el.addEventListener("click", async (e) => {
     const t = e.target;
@@ -805,6 +837,19 @@ async function exportSheet(rec) {
 }
 
 // ---------------------------------------------------------------- review screen
+async function thumbURL(key, card) {
+  const blob = await store.getFile(key, card.frames[0].path);
+  if (!blob) return null;
+  const params = displayFor(key, card)(0), head = new Uint8Array(await blob.slice(0, 26).arrayBuffer());
+  const is16 = head[0] === 137 && head[24] === 16;
+  if (!params && !is16) return URL.createObjectURL(blob);
+  const src = await frameSource(key, card.frames[0].path), img = rendered(src, params);
+  const k = Math.min(1, 320 / Math.max(card.w, card.h)), c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(card.w * k)); c.height = Math.max(1, Math.round(card.h * k));
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  const small = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.85));
+  return URL.createObjectURL(small);
+}
 async function openReview(key) {
   const rec = await store.getDeck(key);
   if (!rec) return go("#/");
@@ -823,13 +868,13 @@ async function openReview(key) {
       if (!en.isIntersecting) continue;
       io.unobserve(en.target);
       const card = byId.get(en.target.dataset.card);
-      store.getFile(key, card.frames[0].path).then((blob) => {
-        if (!blob) return;
-        const u = URL.createObjectURL(blob); urls.push(u);
+      thumbURL(key, card).then((u) => {
+        if (!u) return;
+        urls.push(u);
         const T = en.target.clientWidth, [x, y, w, h] = viewRect(card), k = Math.max(T / w, T / h);
         Object.assign(en.target.style, { backgroundImage: `url(${u})`, backgroundSize: `${card.w * k}px ${card.h * k}px`,
           backgroundPosition: `${T / 2 - (x + w / 2) * k}px ${T / 2 - (y + h / 2) * k}px` });
-      });
+      }).catch(() => {});
     }
   }, { rootMargin: "300px" });
   cleanup.push(() => { io.disconnect(); urls.forEach((u) => URL.revokeObjectURL(u)); app.onclick = null; });

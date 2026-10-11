@@ -18,7 +18,10 @@ app/                    the whole app: static files, no build step
   deck.schema.json      JSON Schema of deck.json
   sw.js, manifest.webmanifest   offline cache + install + Android share target
   js/app.js             screens: home, swipe, review, sheets, zoom
-  js/editor.js          mask editor (brush, eraser, lasso, objects, classes, undo)
+  js/editor.js          mask editor: brush, contour, polygon, magic wand, pick, erase, cut, merge,
+                        fill holes, delete; objects + classes, channels, undo/redo
+  js/contrast.js        black/white point, gamma, invert per deck or channel
+  js/prefs.js           per-viewer settings (localStorage)
   js/deck.js            deck.json -> normalized deck + LLM-pasteable errors
   js/importer.js        zip / deck.json / link import, size checks
   js/view.js            card renderer (pixel-exact vector mask outlines)
@@ -53,7 +56,9 @@ The test covers:
 - swipes (mouse and real touch), buttons, keys and undo
 - review and changing an answer
 - editing the answer buttons
-- "both wrong → draw" in the mask editor (start from a model, brush, lasso, undo/redo)
+- "both wrong → draw" in the mask editor (start from a model, brush, contour, undo/redo)
+- raw 16-bit microscopy: auto contrast, the contrast panel, channel switching, and the cell tools (pick, merge, cut, wand + slider, contour, polygon, delete, fill holes)
+- the confetti blast on a `celebrate` answer
 - annotate decks with classes
 - export contents
 - persistence after a reload
