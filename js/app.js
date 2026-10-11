@@ -330,7 +330,8 @@ Give me the finished .hooman.zip file.`;
   const sh = openSheet(`<h3>✨ Make a deck with any AI chat</h3>
     <p>ChatGPT, Claude, Gemini and others can build a deck from your images and your model's results. Copy this prompt, fill in the brackets, and attach your images. Then import the zip it gives you.</p>
     <textarea id="ai-prompt" spellcheck="false">${esc(prompt)}</textarea>
-    <div class="row"><button class="btn" data-copy>Copy prompt</button><a class="btn quiet" href="llms.txt" target="_blank" style="text-decoration:none">Read the format</a></div>`);
+    <div class="row"><button class="btn" data-copy>Copy prompt</button><a class="btn quiet" href="llms.txt" target="_blank" style="text-decoration:none">Read the format</a></div>
+    <p style="font-size:13px">Using Claude? Add the <a href="skill/hooman-deck-builder.zip" download style="color:var(--focus)">Hooman deck-builder skill</a> (claude.ai: Settings → Capabilities → Skills → Upload). It builds, checks and reads decks with tested scripts.</p>`);
   sh.el.onclick = async (e) => {
     if (e.target.closest("[data-copy]")) { if (await copyText($("#ai-prompt", sh.el).value)) toast("Copied. Paste it into your AI chat"); }
   };
