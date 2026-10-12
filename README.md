@@ -55,7 +55,7 @@ tests/e2e_v3.py         0.3 features: tap/follow answers, notes, number/text, pe
                         backup/restore, guides, bold, provenance, storage check, copy for the AI, colours
 tests/e2e_v4.py         0.4: decks from photos, sharing (file, link, QR), Drive features against a stand-in Google
 tests/e2e_v5.py         0.4: channels per time frame, narrow-card layout, Start from across frames / bold only
-tests/e2e_v6.py         0.4.2: the install button (Android dialog or steps, iPhone, installed app, computers)
+tests/e2e_v6.py         0.4.2-0.4.4: the install button (Android dialog or steps, iPhone, installed app, computers), the Drive guide
 reference/              the earlier claude.ai pages this app grew from (read-only)
 ```
 

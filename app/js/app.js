@@ -153,7 +153,7 @@ async function home() {
     </div>
     <div class="section-title">Your decks</div>
     ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.</div>`}
-    <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
+    <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><button class="link-btn" data-guide>☁ Drive guide</button> · <a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
   </main>
   <input type="file" id="file" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json,application/octet-stream" hidden>`;
   const file = $("#file");
@@ -258,6 +258,7 @@ async function settingsSheet() {
       <button class="btn quiet" data-b="restore">Restore a backup…</button></div>
     <p class="muted" style="font-size:12px">Restore also takes a deck's exported <span class="mono">.answers.zip</span>, to continue someone's work or merge two devices.</p>
     <div class="stack">${["prompt", "steps", "installed"].includes(installState()) ? `<button class="btn quiet" data-b="install">📲 Install the app</button>` : ""}
+      <button class="btn quiet" data-guide>☁ Google Drive, OneDrive, Dropbox: how to</button>
       <button class="btn quiet" data-b="tour">Show the tour again</button></div>
     <input type="file" id="restore-file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream" hidden>`);
   const nameIn = $("#set-name", sh.el);
@@ -1211,7 +1212,40 @@ ${out.csv}`;
 // ---------------------------------------------------------------- sharing, Google Drive, photos
 const mb = (bytes) => (bytes < 1e6 ? `${Math.max(1, Math.round(bytes / 1e3))} KB` : `${(bytes / 1e6).toFixed(1)} MB`);
 const fileSafe = (s) => String(s || "").normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "anonymous";
-const noDrive = `<p class="muted" style="font-size:13px">Google Drive isn't set up for this copy of the app yet (js/config.js).</p>`;
+const noDrive = `<p class="muted" style="font-size:13px">Built-in Google Drive isn't switched on in this copy of the app, but any drive app works through the phone's share menu and file picker. <button class="link-btn" data-guide>How to use a drive</button></p>`;
+
+// How to use Google Drive, OneDrive, Dropbox or iCloud: the phone's own file picker and share menu always work;
+// the built-in Google Drive features are added when this copy of the app has its Google ids (config.js).
+function driveGuide() {
+  const ios = isIOS();
+  openSheet(`<h3>☁ Google Drive, OneDrive, Dropbox</h3>
+    ${drive.googleReady() ? `<div class="section-title">Built in: Google Drive</div>
+    <ul class="steps">
+      <li><b>Open from Google Drive</b> on the home screen picks a deck from your Drive.</li>
+      <li>Deck menu ⋮ → <b>Share this deck</b> → <b>Share a link</b> uploads the deck and gives a link and a QR code.</li>
+      <li>Deck menu ⋮ → <b>Team folder on Google Drive</b>: everyone saves their answers to one shared folder, and Results compares the whole team.</li>
+      <li>Google asks you to sign in the first time. Hooman sees only the files you pick or that it saved itself.</li></ul>
+    <div class="section-title">Any drive app</div>` : `<p>Hooman works with any drive app on this ${ios ? "iPhone" : "phone"}, through the phone's own file picker and share menu. The drive's app needs to be installed.</p>`}
+    <div class="section-title">Open a deck from a drive</div>
+    <ol class="steps">
+      <li>Tap <b>＋ Import deck</b>.</li>
+      ${ios ? `<li>Tap <b>Choose File</b>, then <b>Browse</b>, and pick <b>Google Drive</b>, <b>OneDrive</b>, <b>Dropbox</b> or <b>iCloud Drive</b> under Locations.</li>`
+            : `<li>In the file picker, open the menu <b>☰</b> and pick <b>Drive</b>, <b>OneDrive</b> or <b>Dropbox</b>.</li>`}
+      <li>Tap the deck's <span class="mono">.zip</span>.</li></ol>
+    <div class="section-title">Save answers or a backup to a drive</div>
+    <ol class="steps">
+      <li>Deck menu ⋮ → <b>Export answers</b> → <b>Share or save the .zip</b>. For everything at once: ⚙ → <b>Back up answers</b>.</li>
+      ${ios ? `<li>In the share menu, tap <b>Save to Files</b> and pick the drive, or tap the drive's own app.</li>`
+            : `<li>In the share menu, tap <b>Drive</b> (Save to Drive), <b>OneDrive</b> or <b>Dropbox</b>.</li>
+      <li>Saved to Downloads instead? Open the drive's app, tap <b>＋</b> → <b>Upload</b>, and pick the file.</li>`}</ol>
+    <div class="section-title">Work as a team</div>
+    <ol class="steps">
+      <li>Make a shared folder on your drive and put the deck's <span class="mono">.zip</span> in it.</li>
+      <li>Everyone imports the deck from the folder, sets their name (⚙), answers, and saves their export back to the folder.</li>
+      <li>To compare: deck menu ⋮ → <b>Results</b> → <b>Compare with another export…</b>, and pick a teammate's file.</li></ol>
+    ${drive.googleReady() ? "" : `<p class="muted" style="font-size:13px">A Google Drive share link won't open with <b>From a link</b> in this copy of the app. Import the file from the Drive app instead.</p>`}
+    <div class="stack"><button class="btn" data-close>Got it</button></div>`).el.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) closeSheet(); });
+}
 
 function linkBlock(link) {
   return `<div class="share-link"><div class="qr">${qrSVG(link)}</div>
@@ -1448,6 +1482,7 @@ async function start() {
   if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetOpen && sheetOpen.dismissable) closeSheet(); });
   watchInstall(refreshInstall);
+  document.addEventListener("click", (e) => { if (e.target.closest("[data-guide]")) driveGuide(); });
   const qs = new URLSearchParams(location.search);
   await route();
   if (qs.has("shared")) {                     // a zip shared to the installed app (see sw.js)

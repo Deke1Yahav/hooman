@@ -1,4 +1,5 @@
-"""End-to-end checks for 0.4.2's install button: shown only while the app isn't installed on this device.
+"""End-to-end checks for 0.4.2-0.4.4: the install button (shown only while the app isn't installed on this device)
+and the Drive guide (any drive app through the phone's picker and share menu; built-in Google Drive when set up).
 
     python tests/e2e_v6.py            # screenshots go to tests/out/
 
@@ -10,7 +11,7 @@ import sys
 
 from playwright.sync_api import sync_playwright
 
-from e2e import OUT, serve, check, failures
+from e2e import OUT, serve, check, failures, import_example
 from e2e_v3 import phone, watch
 
 ANDROID = "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36"
@@ -145,6 +146,51 @@ def main():
         check(b is not None and "on this computer" in b[0] and b[1] == "Install", f"a computer browser that can install offers it ({b})")
         ctx.close()
 
+        print("Drive guide")
+        ctx = phone(browser, user_agent=ANDROID); page = ctx.new_page(); watch(page, errors)
+        page.goto(base); page.wait_for_selector(".hero")
+        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        g = page.locator(".sheet").inner_text().lower()          # section titles are upper-case in CSS
+        check("open a deck from a drive" in g and "save answers or a backup" in g and "work as a team" in g and "☰" in g and "save to drive" in g,
+              "the footer's Drive guide: open from a drive, save to a drive, work as a team (Android words)")
+        check("built in" not in g and "from a link" in g, "without Google ids: no built-in section, and Drive share links are explained")
+        page.wait_for_timeout(700); page.screenshot(path=OUT / "65_drive_guide.png")
+        page.get_by_role("button", name="Got it").click(); page.wait_for_timeout(300)
+        check(page.locator(".sheet").count() == 0, "Got it closes the guide")
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet h3")
+        page.locator(".sheet [data-guide]").click(); page.wait_for_timeout(300)
+        check("Google Drive, OneDrive, Dropbox" in page.locator(".sheet h3").inner_text(), "settings opens the Drive guide")
+        page.keyboard.press("Escape"); page.wait_for_timeout(250)
+        import_example(page, "Is it a circle?")
+        page.locator("[data-act=menu]").click(); page.locator(".sheet [data-m=share]").click(); page.wait_for_selector(".sheet h3:has-text('Share this deck')")
+        sh = page.locator(".sheet").inner_text()
+        check("config.js" not in sh and page.locator(".sheet [data-guide]").count() == 1, "the share sheet speaks to users (no config.js) and links the guide")
+        page.locator(".sheet [data-guide]").click(); page.wait_for_timeout(300)
+        check("open a deck from a drive" in page.locator(".sheet").inner_text().lower(), "the share sheet's link opens the guide")
+        ctx.close()
+
+        ctx = phone(browser, user_agent=IPHONE); page = ctx.new_page(); watch(page, errors)
+        page.goto(base); page.wait_for_selector(".hero")
+        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        g = page.locator(".sheet").inner_text()
+        check("Browse" in g and "iCloud Drive" in g and "Save to Files" in g, "on iPhone the guide uses iPhone words (Browse, iCloud Drive, Save to Files)")
+        ctx.close()
+
+        ctx = phone(browser, user_agent=ANDROID)
+        ctx.route("**/js/config.js", lambda r: r.fulfill(status=200, content_type="text/javascript", body=(
+            'export const GOOGLE = { clientId: "123-test.apps.googleusercontent.com", apiKey: "test-key", appId: "123" }; '
+            'export const googleReady = () => true;')))
+        ctx.route("https://accounts.google.com/**", lambda r: r.fulfill(status=200, content_type="text/javascript", body=""))
+        ctx.route("https://apis.google.com/**", lambda r: r.fulfill(status=200, content_type="text/javascript", body=""))
+        page = ctx.new_page(); watch(page, errors)
+        page.goto(base); page.wait_for_selector(".hero")
+        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        g = page.locator(".sheet").inner_text().lower()
+        check("built in: google drive" in g and "open from google drive" in g and "team folder" in g and "any drive app" in g,
+              "with Google ids: the built-in Drive features come first, then any drive app")
+        page.wait_for_timeout(700); page.screenshot(path=OUT / "66_drive_guide_google.png")
+        ctx.close()
+
         print("Layout")
         for w, h in [(360, 640), (390, 844)]:
             ctx = browser.new_context(viewport={"width": w, "height": h}, is_mobile=True, has_touch=True, user_agent=ANDROID, service_workers="block")
@@ -152,6 +198,8 @@ def main():
             fits = page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
             r = page.locator("#install-slot .banner").bounding_box()
             check(fits and r and r["x"] >= 0 and r["x"] + r["width"] <= w, f"{w}x{h}: the banner fits, no sideways scroll")
+            lines = page.evaluate("(() => { const f = document.querySelector('.foot-note'); return Math.round(f.getBoundingClientRect().height / parseFloat(getComputedStyle(f).lineHeight)); })()")
+            check(lines <= 3, f"{w}x{h}: the footer stays on 3 lines ({lines})")
             page.screenshot(path=OUT / f"64_install_{w}x{h}.png", full_page=True)
             ctx.close()
 

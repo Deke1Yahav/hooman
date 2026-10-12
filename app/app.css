@@ -249,6 +249,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-
 .banner.install .btn { border-color: var(--focus); color: var(--focus); }
 .steps { margin: 12px 0; padding-left: 22px; line-height: 1.5; }
 .steps li { margin: 8px 0; }
+ul.steps { padding-left: 18px; }
 .field { display: grid; gap: 6px; margin-top: 14px; font-size: 14px; color: var(--text); }
 .field .seg { justify-self: start; }
 .note-btn { background: transparent; border: 0; color: var(--muted); font: 500 11px var(--mono); padding: 0 4px; flex: none; cursor: pointer; }
