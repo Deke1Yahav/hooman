@@ -33,6 +33,10 @@ def banner(page):
     return (b.inner_text(), page.locator("#install-slot [data-act=install]").inner_text()) if b.count() else None
 
 
+def foot_link(page):
+    return page.locator(".foot-note [data-act=install]").count() == 1
+
+
 def stored(page):
     return page.evaluate("localStorage.getItem('hooman:installed')")
 
@@ -58,6 +62,7 @@ def main():
         page.goto(base); page.wait_for_selector(".hero")
         b = banner(page)
         check(b is not None and "Install Hooman on this phone" in b[0] and b[1] == "Show me", f"the install banner shows, with steps ({b})")
+        check(foot_link(page), "the footer has an \"Install the app\" link")
         page.screenshot(path=OUT / "60_install_banner_android.png")
         page.locator("#install-slot [data-act=install]").click(); page.wait_for_selector(".sheet h3")
         sheet = page.locator(".sheet").inner_text()
@@ -69,6 +74,10 @@ def main():
         page.reload(); page.wait_for_selector(".hero")
         check(banner(page) is None, "after a reload the banner stays hidden")
         check(settings_has_install(page), "settings still offers \"Install the app\" (in case it was a mistake)")
+        check(foot_link(page), "so does the footer, next to the deck format")
+        page.locator(".foot-note [data-act=install]").click(); page.wait_for_selector(".sheet h3")
+        check("Install the app" in page.locator(".sheet h3").inner_text(), "the footer link opens the steps")
+        page.keyboard.press("Escape"); page.wait_for_timeout(250)
 
         print("Android: the browser offers to install (the app was removed)")
         page.evaluate(OFFER, "accepted")
@@ -95,7 +104,7 @@ def main():
         ctx = phone(browser, user_agent=ANDROID)
         app = ctx.new_page(); watch(app, errors); app.add_init_script(STANDALONE)
         app.goto(base); app.wait_for_selector(".hero")
-        check(banner(app) is None and not settings_has_install(app), "the installed app shows no install button anywhere")
+        check(banner(app) is None and not settings_has_install(app) and not foot_link(app), "the installed app shows no install button anywhere")
         tab = ctx.new_page(); watch(tab, errors)
         tab.goto(base); tab.wait_for_selector(".hero")
         check(banner(tab) is None, "the browser tab knows the app was installed (same storage on Android)")
@@ -124,13 +133,13 @@ def main():
         print("iPhone Home Screen app")
         ctx = phone(browser, user_agent=IPHONE); ctx.add_init_script(IOS_HOME); page = ctx.new_page(); watch(page, errors)
         page.goto(base); page.wait_for_selector(".hero")
-        check(banner(page) is None and not settings_has_install(page) and stored(page) == "true", "the Home Screen app shows no install button")
+        check(banner(page) is None and not settings_has_install(page) and not foot_link(page) and stored(page) == "true", "the Home Screen app shows no install button")
         ctx.close()
 
         print("Computer")
         ctx = browser.new_context(viewport={"width": 1280, "height": 800}, service_workers="block"); page = ctx.new_page(); watch(page, errors)
         page.goto(base); page.wait_for_selector(".hero")
-        check(banner(page) is None and not settings_has_install(page), "a computer browser that can't install shows nothing")
+        check(banner(page) is None and not settings_has_install(page) and not foot_link(page), "a computer browser that can't install shows nothing")
         page.evaluate(OFFER, "accepted")
         b = banner(page)
         check(b is not None and "on this computer" in b[0] and b[1] == "Install", f"a computer browser that can install offers it ({b})")
@@ -143,7 +152,7 @@ def main():
             fits = page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
             r = page.locator("#install-slot .banner").bounding_box()
             check(fits and r and r["x"] >= 0 and r["x"] + r["width"] <= w, f"{w}x{h}: the banner fits, no sideways scroll")
-            page.screenshot(path=OUT / f"64_install_{w}x{h}.png")
+            page.screenshot(path=OUT / f"64_install_{w}x{h}.png", full_page=True)
             ctx.close()
 
         check(not errors, "no console errors" + ("" if not errors else ": " + " | ".join(errors[:5])))

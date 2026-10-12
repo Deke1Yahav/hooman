@@ -153,7 +153,7 @@ async function home() {
     </div>
     <div class="section-title">Your decks</div>
     ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.</div>`}
-    <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a> · <a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
+    <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
   </main>
   <input type="file" id="file" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json,application/octet-stream" hidden>`;
   const file = $("#file");
@@ -177,9 +177,12 @@ function installBanner() {
     : "<b>Install Hooman on this computer.</b> It opens in its own window and works offline.";
   return `<div class="banner install"><span>📲 ${text}</span><button class="btn" data-act="install">${s === "prompt" ? "Install" : "Show me"}</button></div>`;
 }
+// The footer keeps a way to install even after the banner is gone (e.g. "I've installed it" by mistake), except in the app itself.
+const installLink = () => ["prompt", "steps", "installed"].includes(installState()) ? ` · <button class="link-btn" data-act="install">📲 Install the app</button>` : "";
 function refreshInstall(event) {
-  const slot = $("#install-slot");
+  const slot = $("#install-slot"), link = $("#install-link");
   if (slot) slot.innerHTML = installBanner();
+  if (link) link.innerHTML = installLink();
   if (event === "installed") toast("Installed. Open Hooman from your home screen.", 3500);
 }
 async function installFlow() {
