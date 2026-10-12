@@ -441,6 +441,20 @@ def main():
         page.mouse.move(*scr(cx, cy - 22)); page.mouse.down(); page.mouse.move(*scr(cx, cy + 22), steps=10); page.mouse.up(); page.wait_for_timeout(200)
         check(dbg()["objects"] == n_model, "cut splits it again")
 
+        def lone_line(v):                       # a vertical line through object v that crosses no other object
+            ys, xs = np.nonzero(model == v)
+            lx, y0, y1 = int(round(xs.mean())), max(0, ys.min() - 2), min(model.shape[0] - 1, ys.max() + 2)
+            col = model[y0:y1 + 1, lx]
+            return (lx + 0.5, y0, y1 + 1) if set(np.unique(col).tolist()) <= {0, int(v)} and (col == v).sum() >= 5 else None
+        v, (lx, ly0, ly1) = next((v, ln) for v in sorted(set(np.unique(model).tolist()) - {0}, key=lambda v: -(model == v).sum()) if (ln := lone_line(v)))
+        page.locator("[data-e=clear]").click(); page.wait_for_timeout(200)
+        page.locator("[data-tool=cut]").click(); page.wait_for_timeout(100)
+        page.mouse.move(*scr(lx, ly0)); page.mouse.down(); page.mouse.move(*scr(lx, ly1), steps=12); page.mouse.up(); page.wait_for_timeout(500)
+        d = dbg()
+        check(d["objects"] == 2 and d["pixels"] == int((model == v).sum()),
+              f"with nothing drawn yet, a cut across a model's outline takes that object and cuts it ({d['objects']} objects, {d['pixels']} px)")
+        page.locator("[data-e=clear]").click(); page.locator("[data-from=model]").click(); page.wait_for_timeout(300)
+
         check(len(missed) >= 1, f"the test found the nucleus the model missed ({len(missed)})")
         if missed:
             page.locator("[data-tool=wand]").click()

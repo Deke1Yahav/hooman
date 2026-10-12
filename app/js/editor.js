@@ -411,8 +411,42 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       if (lab[i0]) selectAt(p); else flashHint("No model outline here. Show a model with its chip above");
     }
 
+    // A cut across a model's outline that isn't in the hooman's mask yet: take the crossed objects first, as Pick
+    // would (topmost model that the line crosses), so one stroke does "pick, then cut".
+    async function takeCrossed(pts) {
+      const ovs = card.overlays.filter((o) => !guide.has(o.source) && !hidden.has(o.source) && o.shape !== "point" && (o.frame === undefined || o.frame === view.frame));
+      const samples = [];
+      for (let k = 1; k < pts.length; k++) {
+        const [ax, ay] = pts[k - 1], [bx, by] = pts[k], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay)));
+        for (let j = 0; j <= n; j++) samples.push([ax + ((bx - ax) * j) / n, ay + ((by - ay) * j) / n]);
+      }
+      for (let k = ovs.length - 1; k >= 0; k--) {
+        const o = ovs[k];
+        if (o.shape === "mask") {
+          const L = (await loadLabels(rec.key, o.mask)).labels, hit = new Set();
+          for (const q of samples) { const i = at(q), v = i >= 0 ? L[i] : 0; if (v && (!o.value || v === o.value)) hit.add(v); }
+          if (!hit.size) continue;
+          begin("pick");
+          for (const v of hit) {
+            const id = perFrame ? idFor(o.source, v, o.label) : freshId();
+            if (!perFrame) { ensureAs(id, o.label); noteFrom(id, o.source, v); }
+            current = id;
+            for (let i = 0; i < N; i++) if (L[i] === v && !lab[i]) setPx(i, id);
+          }
+          commit();
+          return true;
+        }
+        const poly = o.shape === "box" ? [[o.box[0], o.box[1]], [o.box[0] + o.box[2], o.box[1]], [o.box[0] + o.box[2], o.box[1] + o.box[3]], [o.box[0], o.box[1] + o.box[3]]] : o.polygon;
+        if (!samples.some(([x, y]) => inPolygon(x, y, poly))) continue;
+        const id = freshId(); ensureAs(id, o.label); noteFrom(id, o.source);
+        begin("pick"); fillPolygon(poly, id); commit();
+        return true;
+      }
+      return false;
+    }
+
     // ---- cut: a line through objects splits them; the line's pixels go back to the nearest piece
-    function cutAlong(pts) {
+    async function cutAlong(pts, took = false) {
       const r = Math.max(0.75, 1.5 / view.s), cutPx = new Map();     // index -> old label
       const mark = (cx, cy) => {
         for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(H - 1, Math.floor(cy + r)); y++)
@@ -425,7 +459,10 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
         const [ax, ay] = pts[k - 1], [bx, by] = pts[k], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (r * 0.5)));
         for (let j = 0; j <= n; j++) mark(ax + ((bx - ax) * j) / n, ay + ((by - ay) * j) / n);
       }
-      if (!cutPx.size) return flashHint("The line didn't cross an object");
+      if (!cutPx.size) {
+        if (!took && await takeCrossed(pts)) return cutAlong(pts, true);
+        return flashHint("The line didn't cross an object");
+      }
       begin("cut");
       for (const i of cutPx.keys()) setPx(i, 0);
       const touched = new Set(cutPx.values()), piecesOf = new Map([...touched].map((L) => [L, new Set([L])]));
@@ -465,6 +502,7 @@ export function openEditor({ rec, card, frame = 0, hidden = new Set(), initial =
       }
       commit();
       if (!made) flashHint("Cut didn't split anything: draw all the way across");
+      else if (took) flashHint("Took the model's object, then cut it (undo twice to go back)");
     }
 
     // ---- merge, delete, fill holes
