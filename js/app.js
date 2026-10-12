@@ -153,8 +153,8 @@ async function home() {
       ${drive.googleReady() ? `<button class="btn quiet" data-act="drive">Open from Google Drive</button>` : ""}
     </div>
     <div class="section-title">Your decks</div>
-    ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.</div>`}
-    <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><button class="link-btn" data-guide>☁ Drive guide</button> · <a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
+    ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.<br>New here? <button class="link-btn" data-videos>▶ Watch the ${GUIDE_VIDEOS[0].min} video guide</button></div>`}
+    <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><button class="link-btn" data-videos>▶ Video guide</button> · <button class="link-btn" data-guide>☁ Drive guide</button><br><a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
   </main>
   <input type="file" id="file" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json,application/octet-stream" hidden>`;
   const file = $("#file");
@@ -308,6 +308,7 @@ async function settingsSheet() {
       <button class="btn quiet" data-b="restore">Restore a backup…</button></div>
     <p class="muted" style="font-size:12px">Restore also takes a deck's exported <span class="mono">.answers.zip</span>, to continue someone's work or merge two devices.</p>
     <div class="stack">${["prompt", "steps", "installed"].includes(installState()) ? `<button class="btn quiet" data-b="install">📲 Install the app</button>` : ""}
+      <button class="btn quiet" data-videos>▶ Video guide (YouTube)</button>
       <button class="btn quiet" data-guide>☁ Google Drive, OneDrive, Dropbox: how to</button>
       <button class="btn quiet" data-b="tour">Show the tour again</button></div>
     <input type="file" id="restore-file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream" hidden>`, { onClose: () => offLive() });
@@ -1270,6 +1271,24 @@ ${out.csv}`;
 const mb = (bytes) => (bytes < 1e6 ? `${Math.max(1, Math.round(bytes / 1e3))} KB` : `${(bytes / 1e6).toFixed(1)} MB`);
 const noDrive = `<p class="muted" style="font-size:13px">Built-in Google Drive isn't switched on in this copy of the app, but any drive app works through the phone's share menu and file picker. <button class="link-btn" data-guide>How to use a drive</button></p>`;
 
+// The YouTube user guide: a part is listed once it is published.
+const GUIDE_VIDEOS = [
+  { part: 1, title: "Getting started", min: "3-minute", url: "https://youtu.be/PI-3ms1sx_E",
+    what: "Swiping, zoom and contrast, the mask editor, results, microscopy channels, decks from AI or photos, export" },
+  { part: 2, title: "An AI builds the deck, you fix the masks", min: "2-minute", url: "https://youtu.be/9HHWi0D_Dms",
+    what: "A real microscopy image: Claude builds the deck, then start from the model, cut, magic wand, brush, export" },
+  { part: 3, title: "Tracking, review and your own answers", min: "2-minute", url: "https://youtu.be/Bi8DEyOR9Fc",
+    what: "Fixing a track, divisions, follow mode, review and notes, editing the answer buttons, colours and backup" },
+];
+function videoSheet() {
+  const sh = openSheet(`<h3>▶ Video guide</h3>
+    <p>Short videos on YouTube, in English with subtitles.</p>
+    <div class="stack">${GUIDE_VIDEOS.map((v) => `<a class="btn quiet video-link" href="${v.url}" target="_blank" rel="noopener"><b>Part ${v.part}: ${esc(v.title)} <span class="mono">${esc(v.min.replace("-minute", " min"))}</span></b><span>${esc(v.what)}</span></a>`).join("")}</div>
+    ${GUIDE_VIDEOS.length < 3 ? `<p class="muted" style="font-size:13px">Coming next: tracking, reviewing answers and making the buttons your own.</p>` : ""}
+    <div class="stack"><button class="btn" data-close>Close</button></div>`);
+  sh.el.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) sh.close(); });
+}
+
 // How to use Google Drive, OneDrive, Dropbox or iCloud: the phone's own file picker and share menu always work;
 // the built-in Google Drive features are added when this copy of the app has its Google ids (config.js).
 function driveGuide() {
@@ -1540,7 +1559,7 @@ async function start() {
   if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetOpen && sheetOpen.dismissable) closeSheet(); });
   watchInstall(refreshInstall);
-  document.addEventListener("click", (e) => { if (e.target.closest("[data-guide]")) driveGuide(); });
+  document.addEventListener("click", (e) => { if (e.target.closest("[data-guide]")) driveGuide(); if (e.target.closest("[data-videos]")) videoSheet(); });
   window.addEventListener("hooman:merged", async (e) => {      // live save took in answers from another device
     if (!S || S.key !== e.detail) return;
     S.answers = new Map((await store.answersOf(S.key)).map((a) => [a.card, a]));
