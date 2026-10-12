@@ -43,9 +43,9 @@ PARTS = {
     3: {"script": "part3.json", "label": "user guide · part 3", "name": "Tracking, review, customising", "file": "hooman-guide-3-tracking-review",
         "title": "Hooman in the Loop (3/3): tracking, review and your own answers", "thumb": ("Track, review,<br>make it <span>yours</span>", "Part 3 · tracking & more")},
 }
-DISPLAY = [("deke one yahav dot github dot I O, slash hooman", "deke1yahav.github.io/hooman"), ("A.I.", "AI"), ("Chat G P T", "ChatGPT"),
-           ("ninety five percent", "95%"), ("sixteen bit", "16-bit"), ("half moon", "half-moon ◐"), ("ready made", "ready-made"),
-           ("colour blind safe", "colour-blind-safe")]
+DISPLAY = [("deke one yahav dot github dot I O slash hooman", "deke1yahav.github.io/hooman"), ("A.I.", "AI"), ("Chat G P T", "ChatGPT"),
+           ("ninety-five percent", "95%"), ("sixteen-bit", "16-bit"), ("half moon", "half-moon ◐")]
+SPOKEN = [("nuclei", "nucleye"), ("A.I.", "AI")]   # Kokoro only: "nuclei" comes out as "noo-klih-ee", "A.I." with a pause per letter
 PROMPT = ("Here's a nuclei image (mitosis.tif, BBBC, CC0) and the mask from my threshold model. Make a Hooman in the Loop deck "
           "so I can fix the model's mistakes on my phone: 128-pixel tiles where it merged or missed nuclei, its outlines in red, "
           "swipe up to fix.")
@@ -117,7 +117,11 @@ def tts_kokoro(part):
     """Kokoro, in its own environment. It reads "AI" cleanly ("A.I." makes it pause between the letters)."""
     d = work(part) / "tts"; d.mkdir(parents=True, exist_ok=True)
     jobs = d / "jobs.json"
-    jobs.write_text(json.dumps([{"id": seg["id"], "text": seg["say"].replace("A.I.", "AI")} for seg in script(part)]), encoding="utf-8")
+    def spoken(text):
+        for x, y in SPOKEN:
+            text = text.replace(x, y)
+        return text
+    jobs.write_text(json.dumps([{"id": seg["id"], "text": spoken(seg["say"])} for seg in script(part)]), encoding="utf-8")
     lang = "en-gb" if VOICE_NAME.startswith("b") else "en-us"
     subprocess.run([str(KOKORO_PY), str(VIDEO / "kokoro_tts.py"), str(jobs), str(d), "--voice", VOICE_NAME, "--lang", lang], check=True)
     (d / "voice.txt").write_text(VOICE_NAME)
@@ -445,7 +449,7 @@ def actions_part3(r):
         r.tap("[data-col=cb]", after=900); r.esc()
         r.tap(".deckrow:has-text('Follow a track')", after=2200)
         r.tap("[data-act=back]", after=600); r.tap("[data-act=settings]", after=800)
-        r.tap("[data-col=standard]", after=600)
+        r.tap("[data-col=standard]", after=600); r.stage("hide")
         r.app.locator(".sheet").evaluate("e => e.scrollTo({top: 600, behavior: 'smooth'})"); r.W(2600); r.esc()
     def outro():
         r.stage("card", True, "Free and open source · works offline", "deke1yahav.github.io/hooman")
@@ -617,10 +621,8 @@ def compose(part):
     marks = []                                       # [start, name]; a chapter under 10 s (whole seconds, as YouTube reads them)
     for k, (seg, c) in enumerate(zip(segs, chaps)):  # joins the one before it
         end = int(chaps[k + 1]["start"]) if k + 1 < len(chaps) else int(total)
-        if marks and end - int(c["start"]) < 10:
-            joined = f"{marks[-1][1]} and {seg['chapter'][0].lower()}{seg['chapter'][1:]}"
-            if len(joined) <= 28:
-                marks[-1][1] = joined
+        if marks and end - int(c["start"]) < 10:          # listed, so no step disappears from the chapter list
+            marks[-1][1] += f", {seg['chapter'][0].lower()}{seg['chapter'][1:]}"
         else:
             marks.append([0 if k == 0 else c["start"], seg["chapter"]])
     lines = [f"{fmt_ts(t)} {name}" for t, name in marks]

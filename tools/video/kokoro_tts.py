@@ -12,18 +12,36 @@ jobs.json: [{"id": "intro", "text": "..."}, ...]  ->  out_dir/<id>.wav (24 kHz m
 import argparse
 import json
 import pathlib
-import re
 
 import numpy as np
 import soundfile as sf
 from kokoro_onnx import Kokoro
 
 MODELS = pathlib.Path(__file__).resolve().parents[2] / "video_work" / "tts_models"
-PAUSE = {".": 0.32, "?": 0.34, "!": 0.32, ":": 0.22, ";": 0.2}      # between sentences: a speaker's breath, not a robot's gap
+MAX_PAUSE = 0.45          # seconds; the voice sometimes rests 0.6-0.7 s between sentences, which sounds slow
 
 
-def sentences(text):
-    return [s for s in re.split(r"(?<=[.!?:;])\s+(?=[A-Z0-9\"“])", text.strip()) if s]
+def cap_pauses(audio, sr, longest=MAX_PAUSE, floor_db=-40.0, win=0.01):
+    """Shorten every quiet stretch longer than `longest` to `longest` (the middle of it is cut)."""
+    n = int(sr * win)
+    frames = len(audio) // n
+    if frames < 2:
+        return audio
+    rms = np.sqrt(np.mean(audio[: frames * n].reshape(frames, n).astype(np.float64) ** 2, axis=1))
+    quiet = 20 * np.log10(rms + 1e-9) < floor_db
+    keep, i, cap = [], 0, int(longest / win)
+    while i < frames:
+        j = i
+        while j < frames and quiet[j] == quiet[i]:
+            j += 1
+        if quiet[i] and j - i > cap:
+            half = cap // 2
+            keep.append((i * n, (i + half) * n)); keep.append(((j - (cap - half)) * n, j * n))
+        else:
+            keep.append((i * n, j * n))
+        i = j
+    keep.append((frames * n, len(audio)))
+    return np.concatenate([audio[a:b] for a, b in keep])
 
 
 def main():
@@ -35,11 +53,10 @@ def main():
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
     durations = {}
     for job in json.loads(pathlib.Path(a.jobs).read_text(encoding="utf-8")):
-        parts, sr = [], 24000
-        for s in sentences(job["text"]):
-            audio, sr = k.create(s, voice=a.voice, speed=a.speed, lang=a.lang)
-            parts += [audio, np.zeros(int(sr * PAUSE.get(s[-1], 0.25)), dtype=audio.dtype)]
-        audio = np.concatenate(parts[:-1]) if parts else np.zeros(1, dtype=np.float32)
+        # The whole chapter at once: the voice then carries its own rhythm from sentence to sentence.
+        # (Sentence by sentence with fixed gaps sounded stop-and-go.)
+        audio, sr = k.create(job["text"], voice=a.voice, speed=a.speed, lang=a.lang)
+        audio = cap_pauses(audio, sr)
         sf.write(out / f"{job['id']}.wav", audio, sr, subtype="PCM_16")
         durations[job["id"]] = len(audio) / sr
         print(f"  {job['id']:<9} {durations[job['id']]:5.1f} s")

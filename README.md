@@ -5,7 +5,7 @@
 Hooman in the Loop is a phone-first web app (PWA) for checking a model's results by hand.
 - Swipe to judge what a model found on your images.
 - Draw to fix it.
-- Export clean answers and corrected masks.
+- Export clean answers and corrected masks, or let live save copy them to Google Drive or a folder seconds after each answer.
 
 Any LLM can build a deck from the spec in [app/llms.txt](app/llms.txt). Claude users can add the [hooman-deck-builder skill](https://deke1yahav.github.io/hooman/skill/hooman-deck-builder.zip): it builds and checks decks, and reads the answers back, with tested scripts. The app runs offline, with no account and no server. Everything is stored on the device.
 

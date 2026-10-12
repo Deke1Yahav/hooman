@@ -84,6 +84,8 @@ The hooman exports `<deck id>.answers.zip`. It contains:
 - `masks/<card>.png` (one per frame in time decks)
 - `by` (who answered), `from` / `from_values` / `edits` on drawn objects, `points` (taps, with the segmentation objects they hit), `end` (follow mode), `note`, `number` and `text`
 
+With live save on (Settings → Live save), the same zip is kept up to date in the user's Google Drive or a folder, as `<deck id>.<annotator>.answers.zip`, one per person. For a team, ask for every file in that folder: they compare directly.
+
 ```bash
 python scripts/read_answers.py mine.answers.zip                    # counts, % with 95% intervals, time per card
 python scripts/read_answers.py a.answers.zip b.answers.zip --csv all.csv   # + agreement (Cohen's / Fleiss' kappa)

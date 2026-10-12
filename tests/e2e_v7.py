@@ -168,6 +168,13 @@ def main():
         page.goto(base + "#/"); page.wait_for_selector(".hero")
         check(page.locator(".banner", has_text="only on this device").count() == 0, "live-saved answers don't count as unsaved")
 
+        print("The Drive guide points to live save")
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        g = page.locator(".sheet").inner_text().lower()
+        check("save automatically" in g and "live save" in g and "syncs" in g, "the guide's \"Save automatically\" section names live save and synced folders")
+        page.keyboard.press("Escape"); page.wait_for_timeout(300)
+
         print("Turning it off")
         row = open_settings_row(page, "folder")
         row.get_by_role("button", name="Turn off").click(); page.wait_for_timeout(300)
