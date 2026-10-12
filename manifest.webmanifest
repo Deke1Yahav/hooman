@@ -6,6 +6,8 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "related_applications": [{"platform": "webapp", "url": "https://deke1yahav.github.io/hooman/manifest.webmanifest"}],
+  "prefer_related_applications": false,
   "background_color": "#0d1214",
   "theme_color": "#0d1214",
   "icons": [
