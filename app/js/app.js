@@ -16,6 +16,7 @@ import { buildDeckZip, qrSVG, deckLink } from "./share.js";
 import { buildPhotoDeck } from "./photos.js";
 import * as drive from "./drive.js";
 import { readAnswers } from "./backup.js";
+import { installState, promptInstall, markInstalled, watchInstall, isIOS, isAndroid } from "./install.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -119,8 +120,6 @@ function saveRec(rec) {
   return store.putDeck(raw);
 }
 const modeOf = (deck) => deck.mode || (deck.question ? "swipe" : "annotate");
-const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-const standalone = () => navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 
 // ---------------------------------------------------------------- home
 async function home() {
@@ -142,7 +141,7 @@ async function home() {
   app.innerHTML = `<main class="screen">
     <div class="hero"><img src="icons/icon-192.png" alt=""><div><h1>Hooman in the Loop</h1><p>The AI guesses. The hooman decides.</p></div>
       <button class="icon-btn" data-act="settings" aria-label="Settings and backup" style="margin-left:auto">⚙</button></div>
-    ${isIOS() && !standalone() ? `<div class="banner"><span>On iPhone, add Hooman to your Home Screen (Share → Add to Home Screen). Otherwise Safari may delete your answers after 7 days without use.</span></div>` : ""}
+    <div id="install-slot">${installBanner()}</div>
     ${stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this device.</span><button class="btn quiet" data-act="backup">Back up</button></div>` : ""}
     <div class="actions">
       <button class="btn" data-act="import">＋ Import deck</button>
@@ -165,7 +164,47 @@ async function home() {
     if (!b) return;
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
-       photos: photosSheet, drive: openFromDrive })[b.dataset.act]();
+       photos: photosSheet, drive: openFromDrive, install: installFlow })[b.dataset.act]();
+  };
+}
+
+// ---------------------------------------------------------------- install the app (shown only until it is installed)
+function installBanner() {
+  const s = installState();
+  if (s !== "prompt" && s !== "steps") return "";
+  const text = isIOS() ? "<b>Add Hooman to your Home Screen.</b> It works offline, and Safari can't clear your answers after 7 days unused."
+    : isAndroid() ? "<b>Install Hooman on this phone.</b> It opens from your home screen, full screen, and works offline."
+    : "<b>Install Hooman on this computer.</b> It opens in its own window and works offline.";
+  return `<div class="banner install"><span>📲 ${text}</span><button class="btn" data-act="install">${s === "prompt" ? "Install" : "Show me"}</button></div>`;
+}
+function refreshInstall(event) {
+  const slot = $("#install-slot");
+  if (slot) slot.innerHTML = installBanner();
+  if (event === "installed") toast("Installed. Open Hooman from your home screen.", 3500);
+}
+async function installFlow() {
+  if (installState() !== "prompt") return installSteps();
+  const r = await promptInstall();
+  if (r === "dismissed") toast("Not now. The button stays here if you change your mind.");
+}
+function installSteps() {
+  const sh = openSheet(`${isIOS() ? `<h3>📲 Add to Home Screen</h3>
+    <ol class="steps">
+      <li>Tap <b>Share</b>: the square with an arrow ↑, at the bottom of Safari (top right on iPad).</li>
+      <li>Scroll down and tap <b>Add to Home Screen</b>.</li>
+      <li>Tap <b>Add</b>, then open Hooman from its new icon.</li></ol>
+    <p>In Chrome on iPhone, the Share button ↑ has <b>Add to Home Screen</b> too.</p>
+    <p class="muted" style="font-size:13px">The Home Screen app keeps its own decks and answers. Answered cards here? Back them up first (⚙ → Back up answers), then restore the backup in the app.</p>`
+    : `<h3>📲 Install the app</h3>
+    <ol class="steps">
+      <li>Open the browser menu: <b>⋮</b> at the top right in Chrome, <b>≡</b> at the bottom in Samsung Internet.</li>
+      <li>Tap <b>Install app</b> or <b>Add to Home screen</b>.</li>
+      <li>Open Hooman from its new icon. Your decks and answers come with it.</li></ol>
+    <p class="muted" style="font-size:13px">Not in the menu? Open <span class="mono">${esc(appURL())}</span> in Chrome.</p>`}
+    <div class="row"><button class="btn" data-done>I've installed it</button><button class="btn quiet" data-close>Close</button></div>`);
+  sh.el.onclick = (e) => {
+    if (e.target.closest("[data-close]")) sh.close();
+    if (e.target.closest("[data-done]")) { markInstalled(); sh.close(); toast("Great. The install button won't show here again."); }
   };
 }
 
@@ -215,7 +254,8 @@ async function settingsSheet() {
       <button class="btn quiet" data-b="all">Back up everything, with images</button>
       <button class="btn quiet" data-b="restore">Restore a backup…</button></div>
     <p class="muted" style="font-size:12px">Restore also takes a deck's exported <span class="mono">.answers.zip</span>, to continue someone's work or merge two devices.</p>
-    <div class="stack"><button class="btn quiet" data-b="tour">Show the tour again</button></div>
+    <div class="stack">${["prompt", "steps", "installed"].includes(installState()) ? `<button class="btn quiet" data-b="install">📲 Install the app</button>` : ""}
+      <button class="btn quiet" data-b="tour">Show the tour again</button></div>
     <input type="file" id="restore-file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream" hidden>`);
   const nameIn = $("#set-name", sh.el);
   nameIn.addEventListener("change", () => { setAnnotator(nameIn.value); toast(nameIn.value.trim() ? `Hi ${nameIn.value.trim()}` : "Name cleared"); });
@@ -227,6 +267,7 @@ async function settingsSheet() {
     if (t.dataset.col) { setColorMode(t.dataset.col); $$("[data-col]", sh.el).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.col === colorMode()))); toast(colorMode() === "cb" ? "Colour-blind safe colours on" : "Standard colours"); return; }
     if (t.dataset.b === "answers" || t.dataset.b === "all") { setAnnotator(nameIn.value); return backupNow(t.dataset.b === "all"); }
     if (t.dataset.b === "restore") return rf.click();
+    if (t.dataset.b === "install") return installFlow();
     if (t.dataset.b === "tour") { prefs.set("toured", false); toast("The tour shows when you next open a deck"); }
   };
 }
@@ -1403,6 +1444,7 @@ async function openReview(key) {
 async function start() {
   if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetOpen && sheetOpen.dismissable) closeSheet(); });
+  watchInstall(refreshInstall);
   const qs = new URLSearchParams(location.search);
   await route();
   if (qs.has("shared")) {                     // a zip shared to the installed app (see sw.js)

@@ -244,6 +244,10 @@ details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-
 .banner { display: flex; gap: 10px; align-items: center; justify-content: space-between; border: 1px solid var(--yellow); color: var(--yellow); background: rgba(242,193,78,.06);
           border-radius: 12px; padding: 10px 12px; margin: 10px 0 0; font-size: 14px; line-height: 1.4; }
 .banner .btn { min-height: 38px; flex: none; border-color: var(--yellow); color: var(--yellow); }
+.banner.install { border-color: var(--focus); color: var(--text); background: rgba(185,227,255,.06); }
+.banner.install .btn { border-color: var(--focus); color: var(--focus); }
+.steps { margin: 12px 0; padding-left: 22px; line-height: 1.5; }
+.steps li { margin: 8px 0; }
 .field { display: grid; gap: 6px; margin-top: 14px; font-size: 14px; color: var(--text); }
 .field .seg { justify-self: start; }
 .note-btn { background: transparent; border: 0; color: var(--muted); font: 500 11px var(--mono); padding: 0 4px; flex: none; cursor: pointer; }
