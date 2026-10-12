@@ -4,6 +4,8 @@ import { prefs } from "./prefs.js";
 
 export const annotator = () => prefs.get("annotator", "");
 export const setAnnotator = (name) => prefs.set("annotator", String(name || "").trim().slice(0, 60));
+// A name that is safe in file names: "<deck>.<fileSafe(annotator)>.answers.zip".
+export const fileSafe = (s) => String(s || "").normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "anonymous";
 
 // Colour-blind mode swaps the red/green pair (model A/B, no/yes) for orange/sky blue,
 // which every kind of colour vision tells apart; the colours a deck sets on purpose map the same way.

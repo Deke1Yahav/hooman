@@ -74,6 +74,11 @@ export async function logOf(deckKey) {
   return req(d.transaction("log").objectStore("log").index("deck").getAll(deckKey));
 }
 
+// Live save listens here: fn(deckKey, "user" | "restore") after every answer, note or restore that touches a deck.
+const watchers = new Set();
+export function onDeckChange(fn) { watchers.add(fn); return () => watchers.delete(fn); }
+const changed = (deckKey, why) => watchers.forEach((fn) => { try { fn(deckKey, why); } catch (e) { console.error(e); } });
+
 // rec null = card back to unanswered. The history entry is written in the same transaction.
 export async function setAnswer(deckKey, card, rec, logEntry) {
   const d = await db();
@@ -81,7 +86,8 @@ export async function setAnswer(deckKey, card, rec, logEntry) {
   if (rec) tx.objectStore("answers").put({ ...rec, deck: deckKey, card });
   else tx.objectStore("answers").delete([deckKey, card]);
   tx.objectStore("log").add({ ...logEntry, deck: deckKey, card });
-  return done(tx);
+  await done(tx);
+  changed(deckKey, "user");
 }
 
 async function deleteByIndex(store, deckKey) {
@@ -102,7 +108,8 @@ export async function setNote(deckKey, card, text, by) {
   const tx = d.transaction("notes", "readwrite");
   if (text && text.trim()) tx.objectStore("notes").put({ deck: deckKey, card, text: text.trim(), at: new Date().toISOString(), by });
   else tx.objectStore("notes").delete([deckKey, card]);
-  return done(tx);
+  await done(tx);
+  changed(deckKey, "user");
 }
 
 // Restore: write answers / notes as they are, and add history entries (no new log lines of our own).
@@ -113,6 +120,7 @@ export async function putRaw(store, records) {
     for (const r of records.slice(i, i + 200)) st.put(r);
     await done(tx);
   }
+  if (store === "answers" || store === "notes") new Set(records.map((r) => r.deck)).forEach((k) => changed(k, "restore"));
 }
 export async function addLog(entries) {
   const d = await db();
