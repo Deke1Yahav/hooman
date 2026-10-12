@@ -581,15 +581,19 @@ def fmt_ts(t, srt=False):
 
 
 MIN_CHAPTER = 10.5
+VIDEO_URLS = {1: "https://youtu.be/PI-3ms1sx_E", 2: "https://youtu.be/9HHWi0D_Dms", 3: "https://youtu.be/Bi8DEyOR9Fc"}   # published parts, linked from the others' descriptions
+
+
+def timing(part):
+    tl = json.loads((work(part) / "timeline.json").read_text())
+    total, chaps = tl["total"], tl["chapters"]
+    hold = max(0.0, MIN_CHAPTER + 1.5 - (total - chaps[-1]["start"]))   # YouTube drops all chapters if one is under 10 s
+    return total + hold, hold, chaps
 
 
 def compose(part):
     w, o, P = work(part), out_dir(part), PARTS[part]
-    segs = script(part)
-    tl = json.loads((w / "timeline.json").read_text())
-    total, chaps = tl["total"], tl["chapters"]
-    hold = max(0.0, MIN_CHAPTER + 1.5 - (total - chaps[-1]["start"]))   # YouTube drops all chapters if one is under 10 s
-    total += hold
+    total, hold, chaps = timing(part)
     o.mkdir(parents=True, exist_ok=True)
     cmd = [ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(w / "frames" / "frames.ffconcat")]
     parts = []
@@ -607,7 +611,13 @@ def compose(part):
             "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", str(out)]
     subprocess.run(cmd, check=True)
     print(f"video: {out} ({out.stat().st_size / 1e6:.1f} MB, {total:.0f} s)")
+    describe(part)
 
+
+def describe(part):
+    """Subtitles, YouTube description and chapters (no re-encoding: run it alone when a link changes)."""
+    o, P, segs = out_dir(part), PARTS[part], script(part)
+    total, _, chaps = timing(part)
     srt, n = [], 1
     for seg, c in zip(segs, chaps):
         sents = sentences(display(seg["say"]))
@@ -643,7 +653,8 @@ This part covers {about}
 Chapters
 {chr(10).join(lines)}
 
-Part 1: Getting started · Part 2: Fix real masks · Part 3: Tracking, review, customising
+{chr(10).join(f"Part {n}: {t}" + (f" {VIDEO_URLS[n]}" if n in VIDEO_URLS and n != part else " (this video)" if n == part else "") for n, t in ((1, "Getting started"), (2, "Fix real masks"), (3, "Tracking, review, customising")))}
+
 {voice_credit(part)}{" Image: BBBC, human nuclei in mitosis (David Root, CC0)." if part == 2 else ""}
 
 #humanintheloop #machinelearning #microscopy #imageannotation #segmentation
@@ -711,4 +722,4 @@ if __name__ == "__main__":
     steps = [s for s in sys.argv[2:] if not s.startswith("--")] or ["tts", *(["dryrun"] if part == 2 else []), "record", "compose", "thumb"]
     for s in steps:
         print(f"== part {part}: {s}")
-        {"tts": tts, "record": record, "compose": compose, "thumb": thumb, "dryrun": dryrun}[s](part)
+        {"tts": tts, "record": record, "compose": compose, "describe": describe, "thumb": thumb, "dryrun": dryrun}[s](part)

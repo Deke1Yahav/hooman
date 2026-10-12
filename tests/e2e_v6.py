@@ -191,6 +191,23 @@ def main():
         page.wait_for_timeout(700); page.screenshot(path=OUT / "66_drive_guide_google.png")
         ctx.close()
 
+        print("Video guide")
+        ctx = phone(browser, user_agent=ANDROID); page = ctx.new_page(); watch(page, errors)
+        page.goto(base); page.wait_for_selector(".hero")
+        check(page.locator(".empty [data-videos]").count() == 1, "an empty home screen points newcomers to the video guide")
+        page.locator(".foot-note [data-videos]").click(); page.wait_for_selector(".sheet h3")
+        link = page.locator(".sheet a.video-link").first
+        check(page.locator(".sheet h3").inner_text().endswith("Video guide") and link.get_attribute("href") == "https://youtu.be/PI-3ms1sx_E"
+              and link.get_attribute("target") == "_blank" and "Part 1" in link.inner_text(), "the footer's Video guide lists Part 1 on YouTube, opening outside the app")
+        check([page.locator(".sheet a.video-link").nth(i).get_attribute("href") for i in (1, 2)] == ["https://youtu.be/9HHWi0D_Dms", "https://youtu.be/Bi8DEyOR9Fc"]
+              and "Coming next" not in page.locator(".sheet").inner_text(), "and Parts 2 and 3, with nothing left 'coming next'")
+        page.wait_for_timeout(500); page.screenshot(path=OUT / "68_video_guide.png")
+        page.get_by_role("button", name="Close").click(); page.wait_for_timeout(300)
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet h3")
+        page.locator(".sheet [data-videos]").click(); page.wait_for_timeout(300)
+        check("Video guide" in page.locator(".sheet h3").inner_text(), "Settings opens the video guide too")
+        ctx.close()
+
         print("Layout")
         for w, h in [(360, 640), (390, 844)]:
             ctx = browser.new_context(viewport={"width": w, "height": h}, is_mobile=True, has_touch=True, user_agent=ANDROID, service_workers="block")
@@ -199,7 +216,7 @@ def main():
             r = page.locator("#install-slot .banner").bounding_box()
             check(fits and r and r["x"] >= 0 and r["x"] + r["width"] <= w, f"{w}x{h}: the banner fits, no sideways scroll")
             lines = page.evaluate("(() => { const f = document.querySelector('.foot-note'); return Math.round(f.getBoundingClientRect().height / parseFloat(getComputedStyle(f).lineHeight)); })()")
-            check(lines <= 3, f"{w}x{h}: the footer stays on 3 lines ({lines})")
+            check(lines <= 4, f"{w}x{h}: the footer stays on 4 short lines ({lines})")
             page.screenshot(path=OUT / f"64_install_{w}x{h}.png", full_page=True)
             ctx.close()
 

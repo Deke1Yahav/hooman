@@ -2,6 +2,8 @@
 
 > The AI guesses. The hooman decides.
 
+▶ **Video guide:** [Part 1: Getting started](https://youtu.be/PI-3ms1sx_E) (3 min) · [Part 2: An AI builds the deck, you fix the masks](https://youtu.be/9HHWi0D_Dms) (2 min) · [Part 3: Tracking, review and your own answers](https://youtu.be/Bi8DEyOR9Fc) (2 min)
+
 Hooman in the Loop is a phone-first web app (PWA) for checking a model's results by hand.
 - Swipe to judge what a model found on your images.
 - Draw to fix it.
