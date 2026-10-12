@@ -383,7 +383,7 @@ If the app rejects a deck, it shows an exact error, such as `cards[16] (id "017"
 
 ## 9. Getting the deck onto the phone
 
-- **A file:** give the hooman the `.hooman.zip`. They open the app and tap **Import**, or share the zip to the installed app from the phone's share sheet.
+- **A file:** give the hooman the `.hooman.zip`. They open the app and tap **Import**, or share the zip to the installed app from the phone's share sheet. A big zip can go in their Google Drive, OneDrive or Dropbox: **Import** opens the phone's file picker, which shows those drives.
 - **A link:** host `deck.json` (and its images, with relative paths) or the zip at a public URL that allows cross-origin requests, such as GitHub raw or a gist. Then give the hooman `https://deke1yahav.github.io/hooman/?deck=<url-encoded URL>`. The same link also works as a QR code.
 
 Everything stays on the hooman's phone. There's no account and no server.
