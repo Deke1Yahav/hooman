@@ -8,7 +8,7 @@ import { buildExport, shareOrDownload, APP_VERSION } from "./export.js";
 import { openEditor, editorOpen } from "./editor.js";
 import { prefs } from "./prefs.js";
 import { displayFor, openContrast, closeContrast, contrastName } from "./contrast.js";
-import { annotator, setAnnotator, colorMode, setColorMode, themed, untone, lastBackup, markBackup } from "./settings.js";
+import { annotator, setAnnotator, colorMode, setColorMode, themed, untone, lastBackup, markBackup, fileSafe } from "./settings.js";
 import { openTapper, openFollow } from "./tapping.js";
 import { zipKind, buildBackup, restoreBackup, restoreAnswers } from "./backup.js";
 import { renderResults } from "./results.js";
@@ -17,6 +17,7 @@ import { buildPhotoDeck } from "./photos.js";
 import * as drive from "./drive.js";
 import { readAnswers } from "./backup.js";
 import { installState, promptInstall, markInstalled, watchInstall, isIOS, isAndroid } from "./install.js";
+import * as live from "./livesave.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -127,7 +128,7 @@ async function home() {
   const all = await Promise.all(decks.map((d) => store.answersOf(d.key)));
   const counts = all.map((a) => a.length);
   const since = lastBackup();
-  const unsaved = all.flatMap((list, i) => list.filter((a) => a.at > since && a.at > (decks[i].exportedAt || "")));
+  const unsaved = all.flatMap((list, i) => list.filter((a) => a.at > since && a.at > (decks[i].exportedAt || "") && a.at > live.lastSaved(decks[i].key)));
   const oldest = unsaved.reduce((m, a) => (a.at < m ? a.at : m), "9999");
   const stale = unsaved.length && (unsaved.length >= 20 || Date.now() - Date.parse(oldest) > 2 * 864e5);
   const rows = decks.map((d, i) => {
@@ -242,16 +243,65 @@ async function backupNow(images) {
   } catch (e) { sh.close(); showErrors([`Backup failed: ${e.message}`], []); }
 }
 
+// ---------------------------------------------------------------- live save (Settings rows, deck header mark)
+const hhmm = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function liveLine(t) {
+  const s = live.status()[t];
+  if (s.status === "off") return t === "drive" ? "Off. Saves to a “Hooman in the Loop” folder in your Drive, or to the deck's team folder."
+    : `Off. Pick a folder once${isIOS() || isAndroid() ? "" : ": a OneDrive, Dropbox or Google Drive folder on this computer works too"}.`;
+  const word = s.status === "paused" && s.msg ? `Paused. ${s.msg}` : s.status === "error" ? `Couldn't save: ${s.msg || "unknown error"}. Retrying every minute.`
+    : { ok: s.at ? `On · saved ${hhmm(s.at)}` : "On", saving: "Saving…", paused: "Paused: tap Reconnect", offline: "Offline: saves when back online" }[s.status];
+  return t === "folder" && live.folderName() ? `${word} · folder “${live.folderName()}”` : word;
+}
+function liveRow(t, label) {
+  const s = live.status()[t].status;
+  const btns = s === "off" ? `<button class="btn" data-live="on" data-lt="${t}">${t === "folder" ? "Choose a folder" : "Turn on"}</button>`
+    : `${s === "paused" ? `<button class="btn" data-live="reconnect" data-lt="${t}">Reconnect</button>` : ""}<button class="btn quiet" data-live="off" data-lt="${t}">Turn off</button>`;
+  return `<div class="live-row" data-row="${t}"><div><b>${label}</b><span>${esc(liveLine(t))}</span></div>${btns}</div>`;
+}
+function liveRows() {
+  const rows = [live.canDrive() ? liveRow("drive", "☁ Google Drive") : "", live.canFolder() ? liveRow("folder", "📁 A folder on this device") : ""].join("");
+  return rows || `<p class="muted" style="font-size:13px">This browser can't keep a live copy in a folder${isIOS() ? " (iPhone and iPad browsers can't)" : ""}. Your answers are safe on this device; for a copy elsewhere, use Back up below. <button class="link-btn" data-guide>Drive guide</button></p>`;
+}
+async function liveAction(what, t) {
+  try {
+    if (what === "on") { await live.enable(t); toast(t === "drive" ? "Live save to Google Drive is on" : `Live save to “${live.folderName()}” is on`); }
+    else if (what === "off") { await live.disable(t); toast("Live save is off"); }
+    else await live.reconnect(t);
+  } catch (err) { if (err && err.name !== "AbortError") showErrors([err.message || String(err)], []); }
+}
+function liveMark() {
+  const el = $("#live-mark");
+  if (!el) return;
+  const s = live.status(), on = ["drive", "folder"].filter((t) => s[t].status !== "off");
+  el.hidden = !on.length;
+  if (!on.length) return;
+  const worst = ["paused", "error", "offline", "saving", "ok"].find((x) => on.some((t) => s[t].status === x));
+  el.dataset.s = worst;
+  el.textContent = { ok: "☁✓", saving: "☁…", paused: "☁!", error: "☁!", offline: "☁…" }[worst];
+  el.setAttribute("aria-label", `Live save: ${worst === "paused" ? "paused, tap to reconnect" : worst}`);
+}
+function liveTap() {
+  const p = live.paused();
+  if (p.length) return liveAction("reconnect", p[0]);
+  const s = live.status();
+  toast(["drive", "folder"].filter((t) => s[t].status !== "off")
+    .map((t) => `${t === "drive" ? "Google Drive" : `Folder “${live.folderName()}”`}: ${liveLine(t).replace(/^On · /, "").replace(/ · folder “.*”$/, "")}`).join(" · "), 3500);
+}
+
 async function settingsSheet() {
-  let est = "", kept = false;
+  let est = "", kept = false, offLive = () => {};
   try { const e = await navigator.storage.estimate(); est = ` · ${Math.round(e.usage / 1e6)} MB used`; } catch {}
   try { kept = await navigator.storage.persisted(); } catch {}
   const lb = lastBackup();
   const sh = openSheet(`<h3>Settings & backup</h3>
     <label class="field">Your name <span class="muted">(goes into exports, to compare annotators)</span><input type="text" id="set-name" value="${esc(annotator())}" placeholder="e.g. Dekel" maxlength="60" autocomplete="name"></label>
     <div class="field">Colours <span class="seg"><button data-col="standard" aria-pressed="${colorMode() !== "cb"}">Standard</button><button data-col="cb" aria-pressed="${colorMode() === "cb"}">Colour-blind safe</button></span></div>
+    <div class="section-title">Live save</div>
+    <p>Every answer is stored on this device the moment you give it. Live save also keeps a copy elsewhere, a few seconds later: one answers file per deck, like Export.</p>
+    <div id="live-rows">${liveRows()}</div>
     <div class="section-title">Backup</div>
-    <p>Answers live only on this device. A backup holds every deck's answers, notes, drawn masks and history. Import it on any device to continue there; newer answers win.</p>
+    <p>${live.anyOn() ? "A backup is one file for every deck at once." : "Without live save, answers live only on this device."} A backup holds every deck's answers, notes, drawn masks and history. Import it on any device to continue there; newer answers win.</p>
     <p class="mono" style="font-size:12px">last backup: ${lb ? esc(lb.slice(0, 16).replace("T", " ")) : "never"}${est}${kept ? " · storage kept" : " · the browser may clear storage"}</p>
     <div class="stack"><button class="btn" data-b="answers">Back up answers (small)</button>
       <button class="btn quiet" data-b="all">Back up everything, with images</button>
@@ -260,12 +310,15 @@ async function settingsSheet() {
     <div class="stack">${["prompt", "steps", "installed"].includes(installState()) ? `<button class="btn quiet" data-b="install">📲 Install the app</button>` : ""}
       <button class="btn quiet" data-guide>☁ Google Drive, OneDrive, Dropbox: how to</button>
       <button class="btn quiet" data-b="tour">Show the tour again</button></div>
-    <input type="file" id="restore-file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream" hidden>`);
+    <input type="file" id="restore-file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream" hidden>`, { onClose: () => offLive() });
+  offLive = live.onStatus(() => { const box = $("#live-rows", sh.el); if (box) box.innerHTML = liveRows(); });
   const nameIn = $("#set-name", sh.el);
   nameIn.addEventListener("change", () => { setAnnotator(nameIn.value); toast(nameIn.value.trim() ? `Hi ${nameIn.value.trim()}` : "Name cleared"); });
   const rf = $("#restore-file", sh.el);
   rf.addEventListener("change", () => { const f = rf.files[0]; rf.value = ""; if (f) importFile(f); });
   sh.el.onclick = (e) => {
+    const lv = e.target.closest("[data-live]");
+    if (lv) return liveAction(lv.dataset.live, lv.dataset.lt);
     const t = e.target.closest("[data-col],[data-b]");
     if (!t) return;
     if (t.dataset.col) { setColorMode(t.dataset.col); $$("[data-col]", sh.el).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.col === colorMode()))); toast(colorMode() === "cb" ? "Colour-blind safe colours on" : "Standard colours"); return; }
@@ -452,6 +505,7 @@ function buildDeckScreen() {
       <button class="ghost" data-act="back">‹ ${S.revisit ? "Back" : "Decks"}</button>
       <h2>${esc(deck.title)}</h2>
       <span class="count" id="count"></span>
+      <button class="live-mark" id="live-mark" data-act="live" hidden></button>
       <button class="icon-btn" data-act="menu" aria-label="Deck menu">⋮</button>
     </div>
     <div class="pbar"><i id="pbar"></i></div>
@@ -464,6 +518,8 @@ function buildDeckScreen() {
   </main>`;
   renderAnswerButtons();
   updateChips();
+  liveMark();
+  cleanup.push(live.onStatus(liveMark));
   app.onclick = onDeckClick;
   const onContrast = () => { if (S && S.view) S.view.draw(); if (Z) Z.view.draw(); };
   window.addEventListener("hooman:contrast", onContrast);
@@ -979,6 +1035,7 @@ function onDeckClick(e) {
   if (act === "caption") return captionSheet();
   if (act === "skip") { const c = currentCard(); if (c) { S.pos = nextUnanswered(S.pos); if (S.order[S.pos] === c.id) toast("This is the last open card"); showCard(); } return; }
   if (act === "menu") return deckMenu();
+  if (act === "live") return liveTap();
   if (act === "play") return togglePlay();
   if (act === "export") return exportSheet(S.rec);
   if (act === "review") return go(`#/review/${encodeURIComponent(S.key)}`);
@@ -1211,7 +1268,6 @@ ${out.csv}`;
 
 // ---------------------------------------------------------------- sharing, Google Drive, photos
 const mb = (bytes) => (bytes < 1e6 ? `${Math.max(1, Math.round(bytes / 1e3))} KB` : `${(bytes / 1e6).toFixed(1)} MB`);
-const fileSafe = (s) => String(s || "").normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "anonymous";
 const noDrive = `<p class="muted" style="font-size:13px">Built-in Google Drive isn't switched on in this copy of the app, but any drive app works through the phone's share menu and file picker. <button class="link-btn" data-guide>How to use a drive</button></p>`;
 
 // How to use Google Drive, OneDrive, Dropbox or iCloud: the phone's own file picker and share menu always work;
@@ -1483,6 +1539,14 @@ async function start() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetOpen && sheetOpen.dismissable) closeSheet(); });
   watchInstall(refreshInstall);
   document.addEventListener("click", (e) => { if (e.target.closest("[data-guide]")) driveGuide(); });
+  window.addEventListener("hooman:merged", async (e) => {      // live save took in answers from another device
+    if (!S || S.key !== e.detail) return;
+    S.answers = new Map((await store.answersOf(S.key)).map((a) => [a.card, a]));
+    S.notes = new Map((await store.notesOf(S.key)).map((n) => [n.card, n]));
+    if ($("#count")) updateCounts();
+    toast("Answers from your other device were added");
+  });
+  live.start().catch((e) => console.error(e));
   const qs = new URLSearchParams(location.search);
   await route();
   if (qs.has("shared")) {                     // a zip shared to the installed app (see sw.js)

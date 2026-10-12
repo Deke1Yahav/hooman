@@ -250,6 +250,14 @@ details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-
 .steps { margin: 12px 0; padding-left: 22px; line-height: 1.5; }
 .steps li { margin: 8px 0; }
 ul.steps { padding-left: 18px; }
+.live-row { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 8px; }
+.live-row > div { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.live-row b { font-size: 14px; color: var(--text); }
+.live-row span { font-size: 12px; color: var(--muted); line-height: 1.35; }
+.live-row .btn { min-height: 38px; flex: none; padding: 0 12px; font-size: 13px; }
+.live-mark { background: transparent; border: 1px solid var(--line); border-radius: 10px; color: var(--green); font: 500 12px var(--mono); padding: 4px 6px; flex: none; cursor: pointer; }
+.live-mark[data-s="saving"], .live-mark[data-s="offline"] { color: var(--muted); }
+.live-mark[data-s="paused"], .live-mark[data-s="error"] { color: var(--yellow); border-color: var(--yellow); }
 .field { display: grid; gap: 6px; margin-top: 14px; font-size: 14px; color: var(--text); }
 .field .seg { justify-self: start; }
 .note-btn { background: transparent; border: 0; color: var(--muted); font: 500 11px var(--mono); padding: 0 4px; flex: none; cursor: pointer; }

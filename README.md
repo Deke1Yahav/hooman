@@ -30,6 +30,7 @@ app/                    the whole app: static files, no build step
   js/photos.js          "New deck from photos" (no AI)
   js/drive.js           Google Drive: sign-in, Picker, download/upload, share links (drive.file scope)
   js/install.js         "Install the app": shown only until it is installed on this device
+  js/livesave.js        live save: each deck's answers to Google Drive and/or a folder, seconds after each answer
   js/config.js          the Google Cloud ids for this copy of the app (empty = Drive features hidden)
   vendor/qrcode.mjs     QR code generator (Kazuhiko Arase, MIT)
   js/prefs.js           per-viewer settings (localStorage)
@@ -56,6 +57,8 @@ tests/e2e_v3.py         0.3 features: tap/follow answers, notes, number/text, pe
 tests/e2e_v4.py         0.4: decks from photos, sharing (file, link, QR), Drive features against a stand-in Google
 tests/e2e_v5.py         0.4: channels per time frame, narrow-card layout, Start from across frames / bold only
 tests/e2e_v6.py         0.4.2-0.4.4: the install button (Android dialog or steps, iPhone, installed app, computers), the Drive guide
+tests/e2e_v7.py         0.5: live save to a folder (in the installed Google Chrome) and to Google Drive (stand-in): merging,
+                        pausing and reconnecting, team folders, the crash guard
 reference/              the earlier claude.ai pages this app grew from (read-only)
 ```
 
@@ -76,6 +79,7 @@ python tests/e2e_v3.py
 python tests/e2e_v4.py
 python tests/e2e_v5.py
 python tests/e2e_v6.py
+python tests/e2e_v7.py
 python skill/tests/test_skill.py
 ```
 

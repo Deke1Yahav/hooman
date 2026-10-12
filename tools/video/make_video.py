@@ -12,7 +12,9 @@ Steps:
            straight from Chrome (CDP screencast); each chapter lasts as long as its narration
   compose  ffmpeg: H.264 1080p + AAC (voice at each chapter's start), subtitles .srt, chapters + description
   thumb    a 1280x720 thumbnail
-Needs: playwright, piper-tts, imageio-ffmpeg, numpy, Pillow, scipy. The voice model goes in video_work/voice/.
+Needs: playwright, imageio-ffmpeg, numpy, Pillow, scipy, and a voice:
+  --voice=af_heart (default) or another Kokoro voice: tools/video/kokoro_tts.py in its own environment (see there)
+  --voice=piper: piper-tts with en_US-ljspeech-high in video_work/voice/ (the first videos' voice)
 """
 import base64
 import functools
@@ -28,6 +30,9 @@ import wave
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 VIDEO = ROOT / "tools" / "video"
+KOKORO_PY = pathlib.Path.home() / ".venvs" / "hooman-tts" / "Scripts" / "python.exe"
+KOKORO_VOICES = {"af_heart": "Heart", "af_bella": "Bella", "am_michael": "Michael", "am_fenrir": "Fenrir", "bf_emma": "Emma", "bm_george": "George"}
+VOICE_NAME = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--voice=")), "af_heart")
 VOICE = ROOT / "video_work" / "voice" / "en_US-ljspeech-high.onnx"
 LEAD, TAIL = 0.35, 0.75          # seconds of quiet before / after each chapter's narration
 PARTS = {
@@ -85,6 +90,8 @@ def serve():
 
 # ---------------------------------------------------------------- 1. narration
 def tts(part):
+    if VOICE_NAME != "piper":
+        return tts_kokoro(part)
     from piper import PiperVoice
     try:
         from piper import SynthesisConfig
@@ -102,7 +109,26 @@ def tts(part):
             durations[seg["id"]] = w.getnframes() / w.getframerate()
         print(f"  {seg['id']:<9} {durations[seg['id']]:5.1f} s")
     (d / "durations.json").write_text(json.dumps(durations, indent=1))
+    (d / "voice.txt").write_text("piper")
     print(f"narration: {sum(durations.values()):.0f} s in total")
+
+
+def tts_kokoro(part):
+    """Kokoro, in its own environment. It reads "AI" cleanly ("A.I." makes it pause between the letters)."""
+    d = work(part) / "tts"; d.mkdir(parents=True, exist_ok=True)
+    jobs = d / "jobs.json"
+    jobs.write_text(json.dumps([{"id": seg["id"], "text": seg["say"].replace("A.I.", "AI")} for seg in script(part)]), encoding="utf-8")
+    lang = "en-gb" if VOICE_NAME.startswith("b") else "en-us"
+    subprocess.run([str(KOKORO_PY), str(VIDEO / "kokoro_tts.py"), str(jobs), str(d), "--voice", VOICE_NAME, "--lang", lang], check=True)
+    (d / "voice.txt").write_text(VOICE_NAME)
+    print(f"narration ({VOICE_NAME}): {sum(json.loads((d / 'durations.json').read_text()).values()):.0f} s in total")
+
+
+def voice_credit(part):
+    v = (work(part) / "tts" / "voice.txt").read_text().strip() if (work(part) / "tts" / "voice.txt").exists() else "piper"
+    if v == "piper":
+        return "Narration: Piper text-to-speech (LJSpeech voice, public domain)."
+    return f"Narration: Kokoro text-to-speech (Apache 2.0), voice {KOKORO_VOICES.get(v, v)}."
 
 
 # ---------------------------------------------------------------- 2. recording
@@ -616,7 +642,7 @@ Chapters
 {chr(10).join(lines)}
 
 Part 1: Getting started · Part 2: Fix real masks · Part 3: Tracking, review, customising
-Narration: Piper text-to-speech (LJSpeech voice, public domain).{" Image: BBBC, human nuclei in mitosis (David Root, CC0)." if part == 2 else ""}
+{voice_credit(part)}{" Image: BBBC, human nuclei in mitosis (David Root, CC0)." if part == 2 else ""}
 
 #humanintheloop #machinelearning #microscopy #imageannotation #segmentation
 """
@@ -680,7 +706,7 @@ def thumb(part):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     part = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
-    steps = [s for s in sys.argv[2:]] or ["tts", *(["dryrun"] if part == 2 else []), "record", "compose", "thumb"]
+    steps = [s for s in sys.argv[2:] if not s.startswith("--")] or ["tts", *(["dryrun"] if part == 2 else []), "record", "compose", "thumb"]
     for s in steps:
         print(f"== part {part}: {s}")
         {"tts": tts, "record": record, "compose": compose, "thumb": thumb, "dryrun": dryrun}[s](part)

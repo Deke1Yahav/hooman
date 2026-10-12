@@ -7,6 +7,10 @@ import { GOOGLE, googleReady } from "./config.js";
 const SCOPE = "https://www.googleapis.com/auth/drive.file";
 const API = "https://www.googleapis.com/drive/v3", UP = "https://www.googleapis.com/upload/drive/v3";
 let token = null, tokenExp = 0, gisP = null, pickerP = null;
+// Google's browser sign-in lasts about an hour. It is kept for that hour (drive.file scope only), so reopening
+// the app doesn't ask again; after it, live save pauses until a tap (see livesave.js).
+try { const s = JSON.parse(localStorage.getItem("hooman:gtoken") || "null"); if (s && s.exp > Date.now()) { token = s.t; tokenExp = s.exp; } } catch {}
+const httpError = (what, status) => Object.assign(new Error(`${what} (HTTP ${status})`), { status });
 
 export { googleReady };
 
@@ -25,15 +29,20 @@ const loadPicker = () => pickerP || (pickerP = loadScript("https://apis.google.c
 // Load Google's scripts ahead of the tap, so the sign-in popup opens inside the tap (popup blockers).
 export function warmUp() { if (googleReady()) { loadGIS().catch(() => {}); loadPicker().catch(() => {}); } }
 
+export const signedIn = (margin = 60000) => !!token && Date.now() < tokenExp - margin;
+export function forget() { token = null; tokenExp = 0; try { localStorage.removeItem("hooman:gtoken"); } catch {} }
+
 export async function getToken() {
-  if (token && Date.now() < tokenExp - 60000) return token;
+  if (signedIn()) return token;
   await loadGIS();
   return new Promise((resolve, reject) => {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE.clientId, scope: SCOPE,
       callback: (r) => {
         if (r.error) return reject(new Error(r.error_description || r.error));
-        token = r.access_token; tokenExp = Date.now() + (r.expires_in || 3600) * 1000; resolve(token);
+        token = r.access_token; tokenExp = Date.now() + (r.expires_in || 3600) * 1000;
+        try { localStorage.setItem("hooman:gtoken", JSON.stringify({ t: token, exp: tokenExp })); } catch {}
+        resolve(token);
       },
       error_callback: (e) => reject(new Error((e && e.type === "popup_closed") ? "Google sign-in was closed" : (e && e.message) || "Google sign-in failed")),
     });
@@ -67,7 +76,7 @@ export async function pick({ kind = "files", multi = false, parent = null, title
 export async function download(id, name) {
   const tok = await getToken();
   const r = await fetch(`${API}/files/${id}?alt=media`, { headers: { Authorization: `Bearer ${tok}` } });
-  if (!r.ok) throw new Error(`Drive download failed (HTTP ${r.status})`);
+  if (!r.ok) throw httpError("Drive download failed", r.status);
   return new File([await r.blob()], name || "drive.zip", { type: r.headers.get("content-type") || "application/zip" });
 }
 
@@ -87,17 +96,37 @@ export async function downloadPublic(id) {
 export async function upload(blob, name, { folderId = null, fileId = null } = {}) {
   const tok = await getToken();
   const meta = fileId ? { name } : { name, ...(folderId ? { parents: [folderId] } : {}) };
-  const start = await fetch(`${UP}/files${fileId ? `/${fileId}` : ""}?uploadType=resumable&fields=id,name`, {
+  const start = await fetch(`${UP}/files${fileId ? `/${fileId}` : ""}?uploadType=resumable&fields=id,name,version,modifiedTime`, {
     method: fileId ? "PATCH" : "POST",
     headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": blob.type || "application/zip" },
     body: JSON.stringify(meta),
   });
   if (start.status === 404 && fileId) return upload(blob, name, { folderId });      // deleted on Drive meanwhile
   const where = start.headers.get("location");
-  if (!start.ok || !where) throw new Error(`Google Drive upload failed (HTTP ${start.status})`);
+  if (!start.ok || !where) throw httpError("Google Drive upload failed", start.status);
   const put = await fetch(where, { method: "PUT", body: blob });
-  if (!put.ok) throw new Error(`Google Drive upload failed (HTTP ${put.status})`);
+  if (!put.ok) throw httpError("Google Drive upload failed", put.status);
   return put.json();
+}
+
+// A file's version (it goes up with every change) and name; null when it was deleted or is in the bin.
+export async function meta(id) {
+  const tok = await getToken();
+  const r = await fetch(`${API}/files/${id}?fields=id,name,version,modifiedTime,trashed`, { headers: { Authorization: `Bearer ${tok}` } });
+  if (r.status === 404) return null;
+  if (!r.ok) throw httpError("Google Drive answered", r.status);
+  const m = await r.json();
+  return m.trashed ? null : m;
+}
+
+export async function createFolder(name) {
+  const tok = await getToken();
+  const r = await fetch(`${API}/files?fields=id,name`, {
+    method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder" }),
+  });
+  if (!r.ok) throw httpError("could not make a folder on Google Drive", r.status);
+  return r.json();
 }
 
 export async function makePublic(id) {
