@@ -1288,6 +1288,8 @@ function driveGuide() {
       ${ios ? `<li>Tap <b>Choose File</b>, then <b>Browse</b>, and pick <b>Google Drive</b>, <b>OneDrive</b>, <b>Dropbox</b> or <b>iCloud Drive</b> under Locations.</li>`
             : `<li>In the file picker, open the menu <b>☰</b> and pick <b>Drive</b>, <b>OneDrive</b> or <b>Dropbox</b>.</li>`}
       <li>Tap the deck's <span class="mono">.zip</span>.</li></ol>
+    ${live.canDrive() || live.canFolder() ? `<div class="section-title">Save automatically</div>
+    <p>⚙ → <b>Live save</b>${live.canDrive() ? " → <b>Google Drive</b>" : ""}${live.canDrive() && live.canFolder() ? ", or" : ""}${live.canFolder() ? ` a folder${isIOS() || isAndroid() ? "" : " that your drive app syncs (OneDrive, Dropbox, Google Drive for desktop)"}` : ""}. Each deck's answers are copied there a few seconds after every answer, and the ☁ mark on the deck shows when they're saved.</p>` : ""}
     <div class="section-title">Save answers or a backup to a drive</div>
     <ol class="steps">
       <li>Deck menu ⋮ → <b>Export answers</b> → <b>Share or save the .zip</b>. For everything at once: ⚙ → <b>Back up answers</b>.</li>

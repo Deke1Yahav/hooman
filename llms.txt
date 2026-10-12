@@ -272,6 +272,7 @@ In the app, the hooman taps **Export**. They get `<deck id>.answers.zip`, which 
 - With `"frames_are": "time"`, `overlays` has one mask per frame, `{"source": "hooman", "mask": "masks/<id>_f2.png", "frame": 2, "objects": [...]}`. The same label value in different frames is the same cell.
 - `points` (tap and follow answers), `end` (follow), `number`, `text` and `note` appear when they were given. `by` is the annotator's name, if they set one.
 - The hooman can restore an `.answers.zip` (or a full backup) into the app on any device to continue the work. Newer answers win.
+- **Live save** (Settings → Live save) keeps the same zip up to date by itself, a few seconds after each answer: in the hooman's Google Drive (the deck's team folder, or a `Hooman in the Loop` folder) or in a folder on their device. Those files are named `<deck id>.<annotator>.answers.zip`, one per person, so a shared folder collects everyone's answers for comparing. Ask for the files in that folder instead of an export.
 - For small decks, the hooman can also tap **Copy for the AI** on the export screen and paste the answers as CSV text (no masks) straight into the chat.
 
 Join the results back to your data on `card` (the card ID).
