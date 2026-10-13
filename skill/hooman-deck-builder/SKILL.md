@@ -84,6 +84,25 @@ The hooman exports `<deck id>.answers.zip`. It contains:
 - `masks/<card>.png` (one per frame in time decks)
 - `by` (who answered), `from` / `from_values` / `edits` on drawn objects, `points` (taps, with the segmentation objects they hit), `end` (follow mode), `note`, `number` and `text`
 
+### Where the answers are
+
+| The user has | The answers are in |
+|---|---|
+| a decks folder, with "save my answers into this folder too" | `<decks folder>/results/<deck id>.<name>.answers.zip`, next to `hooman-status.<name>.csv` / `.json` (one row per deck: cards, answered, state, last answer, processed) |
+| live save to a folder | that folder, with the same names |
+| live save to Google Drive | the deck's team folder, or "Hooman in the Loop" in their Drive |
+| none of these | they tap Export and give you `<deck id>.answers.zip` |
+
+With a folder, start from the status table: it says which decks have answers you haven't used yet. Ask for the decks folder's path (on a computer with Google Drive for desktop it is often `G:\My Drive\Hooman\decks`), then:
+
+```bash
+python scripts/read_answers.py "DECKS_FOLDER"                                # the status table, then every answers file
+python scripts/read_answers.py "DECKS_FOLDER" --new                          # only answers given since you last processed them
+python scripts/read_answers.py "DECKS_FOLDER" --mark-processed --by Claude   # after you have used them
+```
+
+`--mark-processed` writes `results/processed.json` (the newest answer time used, per answers file). The app reads it, so the user's status table shows what you have processed and how many answers are new since.
+
 If the user has a decks folder (Settings → Decks folder), saving the zip into it is the whole delivery: it appears in the app by itself, and a newer zip with the same `id` updates the deck (answers kept).
 
 With live save on (Settings → Live save), the same zip is kept up to date in the user's Google Drive or a folder, as `<deck id>.<annotator>.answers.zip`, one per person. For a team, ask for every file in that folder: they compare directly.

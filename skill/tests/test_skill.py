@@ -175,6 +175,28 @@ def main():
     check("Tester vs Maya: 4 cards, 75% agree" in agr, f"agreement between two exports ({agr.splitlines()[0].strip()})")
     n = read_answers.write_csv([data], OUT / "joined.csv")
     check(n == 4, "joined CSV has one row per answer")
+
+    print("read_answers on a decks folder (results/, status table, processed ledger)")
+    folder = OUT / "decks"; (folder / "results").mkdir(parents=True, exist_ok=True)
+    (folder / "results" / "example-duel.Tester.answers.zip").write_bytes(exp.read_bytes())
+    (folder / "results" / "hooman-status.Tester.json").write_text(json.dumps({"hooman_status": 1, "annotator": "Tester", "app": "test", "updated_at": "now",
+        "decks": [{"deck": "example-duel", "state": "in progress", "answered": 4, "cards": 30, "new_since_processed": None, "last_answer_at": "x"}]}))
+    found = read_answers.answers_files(folder)
+    check([p.name for p in found] == ["example-duel.Tester.answers.zip"], "a folder: the answers in results/ are found")
+    st = read_answers.status_text(read_answers.status_tables(folder))
+    check("example-duel" in st and "in progress" in st, "the app's status table is read")
+    datas = [read_answers.load(p) for p in found]
+    check(len(read_answers.only_new(datas[0], read_answers.read_ledger(folder))["answers"]) == 4, "before processing, every answer is new")
+    read_answers.mark_processed(folder, datas, "test")
+    led = read_answers.read_ledger(folder)
+    check((folder / "results" / "processed.json").exists() and led["files"]["example-duel.Tester.answers.zip"]["answers"] == 4,
+          "--mark-processed writes results/processed.json")
+    check(len(read_answers.only_new(datas[0], led)["answers"]) == 0, "after processing, nothing is new")
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        read_answers.main([str(folder), "--new"])
+    check("since they were last processed" in buf.getvalue() and "0 of" in buf.getvalue(), "the --new command line works on a folder")
     print(f"\n{'ALL PASSED' if not failures else f'{len(failures)} FAILED'}; files in {OUT}")
     sys.exit(1 if failures else 0)
 

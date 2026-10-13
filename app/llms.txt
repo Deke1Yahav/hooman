@@ -274,6 +274,17 @@ In the app, the hooman taps **Export**. They get `<deck id>.answers.zip`, which 
 - `points` (tap and follow answers), `end` (follow), `number`, `text` and `note` appear when they were given. `by` is the annotator's name, if they set one.
 - The hooman can restore an `.answers.zip` (or a full backup) into the app on any device to continue the work. Newer answers win.
 - **Live save** (Settings → Live save) keeps the same zip up to date by itself, a few seconds after each answer: in the hooman's Google Drive (the deck's team folder, or a `Hooman in the Loop` folder) or in a folder on their device. Those files are named `<deck id>.<annotator>.answers.zip`, one per person, so a shared folder collects everyone's answers for comparing. Ask for the files in that folder instead of an export.
+- **The decks folder**, when the hooman uses one with "save my answers into this folder too":
+
+  ```
+  <decks folder>/                                                the decks (*.hooman.zip): save new ones here
+  <decks folder>/results/<deck id>.<annotator>.answers.zip      live-saved answers, one per deck and person
+  <decks folder>/results/hooman-status.<annotator>.csv / .json  the app's summary, one row per deck
+  <decks folder>/results/processed.json                         yours: which answers you have already used
+  ```
+
+  `hooman-status.<annotator>.csv` columns: `deck, title, zip, cards, answered, open, state` (`not started`, `in progress` or `done`), `last_answer_at, answers_file, saved_at, processed_up_to, new_since_processed`. The `.json` has the same rows under `decks`, plus `updated_at`, `annotator` and `app`. The app rewrites both a few seconds after it saves answers. Read the table first: it tells you which decks have answers you haven't used.
+- After you use a person's answers, record it in `processed.json`, so the next time you (and their status table) know what is new: `{"hooman_processed": 1, "files": {"<answers file name>": {"up_to": "<the newest answer time you used>", "processed_at": "...", "by": "..."}}}`. Keep the entries for other files as they are.
 - For small decks, the hooman can also tap **Copy for the AI** on the export screen and paste the answers as CSV text (no masks) straight into the chat.
 
 Join the results back to your data on `card` (the card ID).

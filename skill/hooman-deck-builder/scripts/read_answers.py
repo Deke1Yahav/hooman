@@ -4,6 +4,11 @@
     python read_answers.py a.answers.zip b.answers.zip c.answers.zip # + agreement (Cohen's kappa for 2, Fleiss' for more)
     python read_answers.py mine.answers.zip --csv joined.csv --masks out_masks/
 
+A folder (the hooman's decks folder, or its "results" subfolder where live save writes):
+    python read_answers.py DECKS_FOLDER                     # the app's status table + every answers file found
+    python read_answers.py DECKS_FOLDER --new               # only answers given since you last processed them
+    python read_answers.py DECKS_FOLDER --mark-processed    # record that you've used them (results/processed.json)
+
 In Python:
     from read_answers import load, summary, masks
     data = load("mine.answers.zip")             # dict: deck, annotator, answers (list of dicts keyed by "card"), history, notes
@@ -44,6 +49,73 @@ def load_all(path) -> list[dict]:
                             "answers": dk.get("answers", []), "history": dk.get("log", []), "notes": dk.get("notes", []), "_source": str(path), "_backup": True})
             return out
     raise ValueError(f"{path}: not a Hooman answers export (no answers.json) or backup (no hooman-backup.json)")
+
+
+# ---------------------------------------------------------------- a folder: answers files, the app's status, the ledger
+def answers_files(folder):
+    """Every *.answers.zip in the folder and in its results/ subfolder (where live save writes)."""
+    folder = pathlib.Path(folder)
+    return sorted(folder.glob("*.answers.zip")) + sorted((folder / "results").glob("*.answers.zip"))
+
+
+def ledger_path(folder):
+    folder = pathlib.Path(folder)
+    return (folder / "results" if (folder / "results").is_dir() else folder) / "processed.json"
+
+
+def read_ledger(folder) -> dict:
+    """processed.json: {"hooman_processed": 1, "files": {answers file name: {"up_to", "processed_at", "by", "answers"}}}"""
+    p = ledger_path(folder)
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d.get("files"), dict) else {"hooman_processed": 1, "files": {}}
+    except (OSError, ValueError):
+        return {"hooman_processed": 1, "files": {}}
+
+
+def mark_processed(folder, datas, by="AI"):
+    """Record, per answers file, the newest answer time you have used. The app shows it in its status table."""
+    import datetime
+    ledger = read_ledger(folder)
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for d in datas:
+        times = [a.get("at", "") for a in d.get("answers", [])]
+        if times:
+            ledger["files"][pathlib.Path(d["_source"]).name] = {"up_to": max(times), "processed_at": now, "by": by, "answers": len(times)}
+    ledger_path(folder).write_text(json.dumps(ledger, indent=1), encoding="utf-8")
+    return ledger_path(folder)
+
+
+def only_new(d, ledger):
+    """The same data with only the answers given after the ledger's "up_to" for its file."""
+    up_to = ledger["files"].get(pathlib.Path(d.get("_source", "")).name, {}).get("up_to", "")
+    return {**d, "answers": [a for a in d.get("answers", []) if a.get("at", "") > up_to]}
+
+
+def status_tables(folder):
+    """The app's hooman-status.<annotator>.json files (one per person whose live save writes here)."""
+    folder = pathlib.Path(folder)
+    out = []
+    for p in sorted(folder.glob("hooman-status.*.json")) + sorted((folder / "results").glob("hooman-status.*.json")):
+        try:
+            out.append(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def status_text(statuses) -> str:
+    lines = []
+    for st in statuses:
+        lines.append(f"{st.get('annotator') or 'someone'} (app {st.get('app', '?')}, updated {st.get('updated_at', '?')}):")
+        lines.append(f"  {'deck':<28} {'state':<12} {'answered':>9} {'cards':>6} {'new*':>5}  last answer")
+        for r in st.get("decks", []):
+            new = r.get("new_since_processed")
+            lines.append(f"  {str(r.get('deck'))[:28]:<28} {str(r.get('state')):<12} {r.get('answered', 0):>9} {r.get('cards', 0):>6} "
+                         f"{'' if new is None else new:>5}  {r.get('last_answer_at') or '-'}")
+    if lines:
+        lines.append("  * new since processed (results/processed.json); empty = never processed")
+    return "\n".join(lines)
 
 
 def wilson(k, n, z=1.96):
@@ -172,9 +244,25 @@ def write_csv(datas, out):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Summarize Hooman in the Loop answers (and compare annotators).")
-    ap.add_argument("files", nargs="+"); ap.add_argument("--csv"); ap.add_argument("--masks", help="folder for the drawn masks as .npy (needs numpy + Pillow)")
+    ap.add_argument("files", nargs="+", help="answers zips, backups, or a folder (the decks folder or its results/)")
+    ap.add_argument("--csv"); ap.add_argument("--masks", help="folder for the drawn masks as .npy (needs numpy + Pillow)")
+    ap.add_argument("--new", action="store_true", help="folder only: just the answers given since processed.json")
+    ap.add_argument("--mark-processed", action="store_true", help="folder only: record that you've used these answers")
+    ap.add_argument("--by", default="AI", help="who processed them (for --mark-processed)")
     a = ap.parse_args(argv)
+    folder = pathlib.Path(a.files[0]) if len(a.files) == 1 and pathlib.Path(a.files[0]).is_dir() else None
+    if folder:
+        st = status_tables(folder)
+        if st:
+            print(status_text(st)); print()
+        a.files = [str(p) for p in answers_files(folder)]
+        if not a.files:
+            print(f"no *.answers.zip in {folder} or {folder / 'results'}"); return 0
     datas = [d for f in a.files for d in load_all(f)]
+    if folder and a.new:
+        ledger = read_ledger(folder)
+        datas = [only_new(d, ledger) for d in datas]
+        print(f"Only answers given since they were last processed ({ledger_path(folder)}):\n")
     for d in datas:
         print(summary(d)); print()
     if len(datas) > 1:
@@ -190,6 +278,8 @@ def main(argv=None):
                 for fr, arr in frames.items():
                     np.save(out / f"{card.replace('/', '__')}_f{fr}.npy", arr); n += 1
         print(f"wrote {n} mask arrays to {out}")
+    if folder and a.mark_processed:
+        print(f"marked as processed in {mark_processed(folder, [d for d in datas if not d.get('_backup')], a.by)}")
     return 0
 
 

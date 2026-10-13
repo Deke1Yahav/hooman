@@ -286,7 +286,7 @@ function decksRow() {
   return `<div class="live-row"><div><b>📂 Decks folder</b><span>${esc(line)}</span></div>
       ${s.status === "paused" ? `<button class="btn" data-decks="reconnect">Reconnect</button>` : `<button class="btn quiet" data-decks="check">Check now</button>`}<button class="btn quiet" data-decks="off">Turn off</button></div>
     ${s.errors.length ? `<p style="font-size:13px;margin:6px 0 0"><button class="link-btn" data-decks="errors" style="color:var(--yellow)">${s.errors.length} zip${s.errors.length > 1 ? "s" : ""} in the folder couldn't be opened: see why</button></p>` : ""}
-    ${live.canFolder() ? `<p class="muted" style="font-size:13px;margin:6px 0 0">${resultsHere ? `Your answers are saved into “results” in this folder (live save).` : `<button class="link-btn" data-decks="results">Save my answers into this folder too</button> (a “results” folder inside it, a few seconds after each answer)`}</p>` : ""}`;
+    ${live.canFolder() ? `<p class="muted" style="font-size:13px;margin:6px 0 0">${resultsHere ? `Your answers are saved into “results” in this folder (live save).` : `<button class="link-btn" data-decks="results">Save my answers into this folder too</button> (a “results” folder inside it, a few seconds after each answer, with a summary table your AI can read)`}</p>` : ""}`;
 }
 async function decksAction(what) {
   try {
@@ -1279,7 +1279,7 @@ function deleteSheet(rec) {
     <div class="row"><button class="btn danger" data-del>Delete</button><button class="btn quiet" data-close>Cancel</button></div>`);
   sh.el.onclick = async (e) => {
     if (e.target.closest("[data-close]")) sh.close();
-    if (e.target.closest("[data-del]")) { forgetLoading(rec.key); await store.deleteDeck(rec.key); sh.close(); toast("Deleted"); go("#/"); }
+    if (e.target.closest("[data-del]")) { forgetLoading(rec.key); await store.deleteDeck(rec.key); live.statusSoon(); sh.close(); toast("Deleted"); go("#/"); }
   };
 }
 
@@ -1675,6 +1675,7 @@ async function start() {
   dfolder.onStatus((s) => {                       // new and updated decks from the decks folder
     if (s.status === "checking") return;
     if (s.status === "ok" && (s.added.length || s.updated.length)) {
+      live.statusSoon();
       const parts = [];
       if (s.added.length) parts.push(`New from your folder: ${s.added.map((t) => `“${t}”`).join(", ")}`);
       if (s.updated.length) parts.push(`Updated (answers kept): ${s.updated.map((t) => `“${t}”`).join(", ")}`);

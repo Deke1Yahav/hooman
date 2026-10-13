@@ -116,6 +116,27 @@ def main():
         n = len(json.loads(zipfile.ZipFile(io.BytesIO(base64.b64decode(got))).read("answers.json"))["answers"]) if got else 0
         check(n == 1, f"the answer is in decks/results/folder-a.Tester.answers.zip ({n})")
 
+        print("The status table next to the answers")
+        page.wait_for_timeout(3500)
+        st = page.evaluate(GET, "decks/results/hooman-status.Tester.json")
+        st = json.loads(base64.b64decode(st)) if st else {"decks": []}
+        row = next((r for r in st["decks"] if r["deck"] == "folder-a"), {})
+        check(row.get("answered") == 1 and row.get("state") == "in progress" and row.get("zip") == "folder-a.hooman.zip"
+              and row.get("answers_file") == "folder-a.Tester.answers.zip" and row.get("new_since_processed") is None,
+              f"hooman-status.Tester.json has the deck's row: zip, answered, state, answers file ({ {k: row.get(k) for k in ('answered', 'state', 'zip')} })")
+        csv = page.evaluate(GET, "decks/results/hooman-status.Tester.csv")
+        csv = base64.b64decode(csv).decode() if csv else ""
+        check(csv.startswith("deck,title,zip,cards,answered,open,state,last_answer_at,answers_file,saved_at,processed_up_to,new_since_processed") and "folder-a" in csv,
+              "and the same as a CSV")
+        page.evaluate(PUT, ["decks/results/processed.json", b64(json.dumps({"hooman_processed": 1, "files": {
+            "folder-a.Tester.answers.zip": {"up_to": "2000-01-01T00:00:00Z", "processed_at": "2000-01-01T00:00:00Z", "by": "test"}}}).encode())])
+        page.keyboard.press("ArrowRight"); page.wait_for_timeout(500)
+        page.evaluate("import('./js/livesave.js').then((m) => m.settled())"); page.wait_for_timeout(3500)
+        st = json.loads(base64.b64decode(page.evaluate(GET, "decks/results/hooman-status.Tester.json")))
+        row = next((r for r in st["decks"] if r["deck"] == "folder-a"), {})
+        check(row.get("processed_up_to") == "2000-01-01T00:00:00Z" and row.get("new_since_processed") == 2,
+              f"the AI's processed.json shows up: processed up to, and 2 answers new since ({row.get('new_since_processed')})")
+
         print("A changed zip updates its deck, but not under the hooman's hands")
         page.evaluate(PUT, ["decks/folder-a.hooman.zip", b64(small_deck("Folder deck A v2", 4))])
         page.evaluate("import('./js/decksfolder.js').then((m) => m.check({ force: true, openKey: 'folder-a' }))"); page.wait_for_timeout(800)
@@ -124,7 +145,7 @@ def main():
         page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(1500)
         toast = page.locator("#toast").inner_text()
         row = page.locator(".deckrow", has_text="Folder deck A v2")
-        check("Updated (answers kept)" in toast and row.count() == 1 and "1 / 4" in row.inner_text(), f"after leaving it, ↻ updates it and keeps the answer ({row.inner_text() if row.count() else toast!r})")
+        check("Updated (answers kept)" in toast and row.count() == 1 and "2 / 4" in row.inner_text(), f"after leaving it, ↻ updates it and keeps the answers ({row.inner_text() if row.count() else toast!r})")
         page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(800)
         check("Nothing new" in page.locator("#toast").inner_text(), "checking again: nothing new")
 

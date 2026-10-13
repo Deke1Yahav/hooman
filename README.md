@@ -63,7 +63,7 @@ tests/e2e_v3.py         0.3 features: tap/follow answers, notes, number/text, pe
 tests/e2e_v4.py         0.4: decks from photos, sharing (file, link, QR), Drive features against a stand-in Google
 tests/e2e_v5.py         0.4: channels per time frame, narrow-card layout, Start from across frames / bold only
 tests/e2e_v6.py         0.4.2-0.4.4: the install button (Android dialog or steps, iPhone, installed app, computers), the Drive guide
-tests/e2e_v9.py         0.7: the decks folder (new, changed and broken zips, resume, results subfolder, reconnect), in Google Chrome
+tests/e2e_v9.py         0.7/0.9: the decks folder (new, changed and broken zips, resume, results, status table, reconnect), in Chrome
 tests/e2e_v8.py         0.6/0.8: big decks open at once, their zip saved whole (jump ahead, restart, broken card, resume)
 tests/e2e_v7.py         0.5: live save to a folder (in the installed Google Chrome) and to Google Drive (stand-in): merging,
                         pausing and reconnecting, team folders, the crash guard
