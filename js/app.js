@@ -156,7 +156,9 @@ async function home() {
     <div id="install-slot">${installBanner()}</div>
     <div id="folder-progress">${folderProgress()}</div>
     ${dfolder.isOn() && dfolder.status().status === "paused" ? `<div class="banner"><span>The decks folder “${esc(dfolder.folderName())}” needs a tap to be read again.</span><button class="btn quiet" data-act="checkdecks">Reconnect</button></div>` : ""}
-    ${decks.filter((d) => loadingOf(d.key) && !loadingOf(d.key).active).map((d) => `<div class="banner"><span>“${esc(d.title)}” wasn't fully saved when the app closed. Pick its zip again to finish.</span><button class="btn quiet" data-act="repick">Pick the zip</button></div>`).join("")}
+    ${decks.filter((d) => loadingOf(d.key) && !loadingOf(d.key).active).map((d) => dfolder.isOn() && dfolder.zipOf(d.key)
+      ? `<div class="banner"><span>“${esc(d.title)}” isn't fully saved on the phone yet. It finishes from your decks folder.</span><button class="btn quiet" data-act="finishzip" data-zip="${esc(dfolder.zipOf(d.key))}">Finish now</button></div>`
+      : `<div class="banner"><span>“${esc(d.title)}” wasn't fully saved when the app closed. Pick its zip again to finish.</span><button class="btn quiet" data-act="repick">Pick the zip</button></div>`).join("")}
     ${stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this device.</span><button class="btn quiet" data-act="backup">Back up</button></div>` : ""}
     <div class="actions">
       <button class="btn" data-act="import">＋ Import deck</button>
@@ -168,6 +170,9 @@ async function home() {
     </div>
     <div class="section-title">${nArch ? `<span class="seg tabs"><button data-act="tab" data-tab="decks" aria-pressed="${tab === "decks"}">My decks (${nActive})</button><button data-act="tab" data-tab="archive" aria-pressed="${tab === "archive"}">Archive (${nArch})</button></span>` : "Your decks"}${dfolder.isOn() ? `<button class="link-btn sec-act" data-act="checkdecks">↻ check folder</button>` : ""}</div>
     ${decks.length && !rows ? `<div class="empty">${tab === "decks" ? `<b>All done.</b> Finished decks are in the Archive. Import a new deck, or drop one in your decks folder.` : "Nothing archived."}</div>` : ""}
+    ${tab === "decks" && dfolder.isOn() && dfolder.status().available.length ? `<div class="section-sub">In your decks folder, not on this phone yet: tap to load</div><div class="decks">${dfolder.status().available.map((a) => `<button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
+      <b>${esc(a.name.split("/").pop().replace(/\.hooman\.zip$|\.zip$/i, ""))}</b><span class="count">☁ ${(a.size / 1e6).toFixed(a.size >= 1e7 ? 0 : 1)} MB</span>
+      <span class="sub">${a.update ? "a newer version of a deck you have · " : ""}${esc(a.name)}</span></button>`).join("")}</div>` : ""}
     ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.<br>New here? <button class="link-btn" data-videos>▶ Watch the ${GUIDE_VIDEOS[0].min} video guide</button></div>`}
     <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><button class="link-btn" data-videos>▶ Video guide</button> · <button class="link-btn" data-guide>☁ Drive guide</button><br><a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
   </main>
@@ -181,7 +186,8 @@ async function home() {
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
     if (b.dataset.act === "tab") { prefs.set("homeTab", b.dataset.tab); return home(); }
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
-       photos: photosSheet, drive: openFromDrive, install: installFlow, repick: pickZipAgain, checkdecks: decksCheckNow })[b.dataset.act]();
+       photos: photosSheet, drive: openFromDrive, install: installFlow, repick: pickZipAgain, checkdecks: decksCheckNow,
+       stopcheck: () => dfolder.stop(), loadzip: () => loadZip(b.dataset.zip), finishzip: () => loadZip(b.dataset.zip, true) })[b.dataset.act]();
   };
 }
 
@@ -280,6 +286,9 @@ function showUnloaded(card, why) {
   if (!stage) return;
   stage.innerHTML = `<div class="card-note">${why === "broken"
     ? `<b>This card can't be shown.</b><p>${esc(card.broken || "")}</p><div class="row"><button class="btn" data-act="skip">Skip it</button></div>`
+    : dfolder.isOn() && dfolder.zipOf(S.key)
+    ? `<b>This card isn't on the phone yet.</b><p>The app closed before this deck was saved on the phone. It finishes from your decks folder; your answers stay.</p>
+       <div class="row"><button class="btn" data-act="finishzip" data-zip="${esc(dfolder.zipOf(S.key))}">Finish now</button><button class="btn quiet" data-act="skip">Skip</button></div>`
     : `<b>This card isn't on the phone yet.</b><p>The app closed before this deck was saved on the phone. Pick the deck's zip again to finish; your answers stay.</p>
        <div class="row"><button class="btn" data-act="repick">Pick the zip again</button><button class="btn quiet" data-act="skip">Skip</button></div>`}</div>`;
 }
@@ -290,7 +299,7 @@ function decksRow() {
   const computer = !(isIOS() || isAndroid());
   if (!on) return `<div class="live-row"><div><b>📂 Decks folder</b><span>Off. Pick a folder once: every deck zip you put in it shows up here by itself${computer ? ". A Google Drive, OneDrive or Dropbox folder on this computer works too" : ""}.</span></div><button class="btn" data-decks="on">Choose a folder</button></div>`;
   const line = s.status === "paused" ? `Paused. ${s.msg || "Tap Reconnect."}` : s.status === "checking" ? (s.msg || "Checking…")
-    : `Folder “${name}”${s.at ? ` · ${s.found} deck zip${s.found === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : ""}`;
+    : `Folder “${name}”${s.at ? ` · ${s.found} deck zip${s.found === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : ""}${s.timing ? ` · took ${secs(s.timing.total)} (folders ${secs(s.timing.list)} · file info ${secs(s.timing.info)} · reading ${secs(s.timing.reading)})` : ""}`;
   const resultsHere = live.status().folder.status !== "off" && live.folderName() === "results";
   return `<div class="live-row"><div><b>📂 Decks folder</b><span>${esc(line)}${s.note ? `<br>${esc(s.note)}` : ""}</span></div>
       ${s.status === "paused" ? `<button class="btn" data-decks="reconnect">Reconnect</button>` : `<button class="btn quiet" data-decks="check">Check now</button>`}<button class="btn quiet" data-decks="off">Turn off</button></div>
@@ -301,7 +310,8 @@ async function decksAction(what) {
   try {
     if (what === "on") { await dfolder.choose(); decksNothingNew(); }
     else if (what === "off") { await dfolder.turnOff(); toast("The decks folder is off"); }
-    else if (what === "reconnect") await dfolder.reconnect();
+    else if (what === "reconnect") { if ((await dfolder.reconnect()) === "denied") toast("The phone didn't give access to the folder. Settings → Decks folder → Turn off, then Choose a folder.", 6000); }
+    else if (what === "stop") dfolder.stop();
     else if (what === "check") { await dfolder.check({ force: true, openKey: S && S.key }); decksNothingNew(); }
     else if (what === "errors") {
       const e = dfolder.status().errors;
@@ -316,12 +326,22 @@ async function decksAction(what) {
 function decksNothingNew() {
   const s = dfolder.status(), n = s.errors.length;
   if (s.status !== "ok" || s.added.length || s.updated.length) return;
-  const why = !s.found ? `no deck zips (*.hooman.zip) there${s.skipped ? `; ${s.skipped} answers file${s.skipped > 1 ? "s are" : " is"} results, not decks` : ""}` : "nothing new";
+  const wait = s.available.length;
+  const why = !s.found ? `no deck zips (*.hooman.zip) there${s.skipped ? `; ${s.skipped} answers file${s.skipped > 1 ? "s are" : " is"} results, not decks` : ""}`
+    : wait ? `${wait} deck${wait > 1 ? "s wait" : " waits"} for a tap on the home screen (big zips load when you open them)` : "nothing new";
   toast(`“${dfolder.folderName()}”: ${why}${n ? ` (${n} zip${n > 1 ? "s" : ""} couldn't be opened: see Settings)` : ""}`, 5000);
 }
+const secs = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
 function folderProgress() {
   const s = dfolder.status();
-  return s.status === "checking" ? `<div class="banner install"><span>📂 ${esc(s.msg || "Checking the decks folder…")}</span></div>` : "";
+  return s.status === "checking" && !s.quiet ? `<div class="banner install"><span>📂 ${esc(s.msg || "Checking the decks folder…")}</span><button class="btn quiet" data-act="stopcheck">Stop</button></div>` : "";
+}
+// "Tap to load" a deck waiting in the decks folder (or finish one that wasn't fully saved), then open it.
+async function loadZip(name, finish = false) {
+  const key = await dfolder.load(name, S ? S.key : null);
+  if (!key) { const e = dfolder.status().errors; if (e.length) showErrors(e.flatMap((x) => x.errors.map((m) => `${x.name}: ${m}`)), []); return; }
+  if (finish) { toast("Saving the rest of the deck on the phone…", 3000); if (S && S.key === key) return showCard(); }
+  go(`#/deck/${encodeURIComponent(key)}`);
 }
 function decksCheckNow() { return decksAction(dfolder.status().status === "paused" ? "reconnect" : "check"); }
 
@@ -1154,6 +1174,7 @@ function onDeckClick(e) {
   if (act === "menu") return deckMenu();
   if (act === "live") return liveTap();
   if (act === "repick") return pickZipAgain();
+  if (act === "finishzip") return loadZip(t.dataset.zip, true);
   if (act === "loadinfo") { const lo = loadingOf(S.key); return toast(!lo ? "The deck is saved on the phone" : lo.active ? "Saving the deck on the phone. You can work meanwhile." : "Pick the deck's zip again to finish saving it.", 4000); }
   if (act === "play") return togglePlay();
   if (act === "export") return exportSheet(S.rec);
@@ -1698,10 +1719,16 @@ async function start() {
     toast("Answers from your other device were added");
   });
   live.start().catch((e) => console.error(e));
+  let folderShown = "";
   dfolder.onStatus((s) => {                       // new and updated decks from the decks folder
     const fp = $("#folder-progress");
     if (fp) fp.innerHTML = folderProgress();
-    if (s.status === "checking") return;
+    const now = `${s.status}|${s.quiet}`;
+    if (s.status === "checking") {               // the reconnect banner goes as soon as a check starts
+      if (now !== folderShown && !S && parseHash().page === "home") { folderShown = now; home(); }
+      return;
+    }
+    folderShown = now;
     if (s.status === "ok" && (s.added.length || s.updated.length)) {
       live.statusSoon();
       const parts = [];
