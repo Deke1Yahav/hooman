@@ -62,9 +62,13 @@ export async function putFiles(deckKey, files) {
   }
 }
 export async function getFile(deckKey, path) {
+  if (sessions.has(deckKey) || (await archiveOf(deckKey))) {     // a big deck: straight from its zip
+    const b = await fromArchive(deckKey, path);
+    if (b) return b;
+  }
   const d = await db();
   const r = await req(d.transaction("files").objectStore("files").get([deckKey, path]));
-  return r ? r.blob : fromArchive(deckKey, path);
+  return r ? r.blob : null;
 }
 
 // Big decks keep their zip whole, as one record: saving it is a single straight copy (the fastest thing phone
@@ -91,7 +95,7 @@ function archiveOf(deckKey) {
       return { files, root: top.slice(0, -"deck.json".length) };
     })().catch(() => null));
   }
-  return archives.get(deckKey).then((a) => { if (!a) archives.delete(deckKey); return a; });
+  return archives.get(deckKey);                 // null (no zip: a small deck) is remembered too
 }
 async function fromArchive(deckKey, path) {
   const s = sessions.get(deckKey);

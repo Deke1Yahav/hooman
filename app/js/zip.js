@@ -63,9 +63,12 @@ export async function readZip(blob) {
     files.set(name, {
       path: name, size,
       async blob() {
-        const lh = await bytesAt(blob, off, 30);
-        if (u32(lh, 0) !== 0x04034b50) throw new ZipError(`broken zip entry "${name}"`);
-        const start = off + 30 + u16(lh, 26) + u16(lh, 28);
+        if (this.start === undefined) {           // where the data begins: read once, then remembered
+          const lh = await bytesAt(blob, off, 30);
+          if (u32(lh, 0) !== 0x04034b50) throw new ZipError(`broken zip entry "${name}"`);
+          this.start = off + 30 + u16(lh, 26) + u16(lh, 28);
+        }
+        const start = this.start;
         const raw = blob.slice(start, start + csize);
         if (method === 0) return new Blob([raw], { type: mimeOf(name) });
         const out = await new Response(raw.stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();

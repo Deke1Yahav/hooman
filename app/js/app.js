@@ -754,17 +754,24 @@ async function showCard() {
   if (mode === "follow" && S.autoEdit) followCard();
 }
 
+// While the hooman looks at a card, the next ones are prepared in the background: sized and checked (big decks),
+// their first time point decoded and its masks outlined, so a swipe shows a card that is ready.
+const AHEAD = 3;
 function prefetch() {
   if (!S) return;
+  const key = S.key, colors = Object.fromEntries(S.rec.deck.sources.map((s) => [s.name, s.color]));
+  const warm = (c) => {
+    framePaths(c, 0).forEach((p) => frameSource(key, p).catch(() => {}));
+    c.overlays.filter((o) => o.shape === "mask" && (o.frame === undefined || o.frame === 0))
+      .forEach((o) => maskLayer(key, o.mask, o.value, colors[o.source], o.style === "fill").catch(() => {}));
+  };
   let i = S.pos;
-  for (let k = 0; k < 2; k++) {
+  for (let k = 0; k < AHEAD; k++) {
     i = (i + 1) % S.order.length;
     const c = S.cardsById.get(S.order[i]);
     if (!c || S.answers.has(c.id)) continue;
-    if (!c.w) { ensureCard(S.key, c, (x) => storedCard(S.key, x)); continue; }   // size the next card ahead
-    framePaths(c, 0).forEach((p) => frameSource(S.key, p).catch(() => {}));   // the next card's channels
-    const colors = Object.fromEntries(S.rec.deck.sources.map((s) => [s.name, s.color]));
-    c.overlays.filter((o) => o.shape === "mask").forEach((o) => maskLayer(S.key, o.mask, o.value, colors[o.source], o.style === "fill").catch(() => {}));
+    if (c.w) warm(c);
+    else ensureCard(key, c, (x) => storedCard(key, x)).then((r) => { if (r === "ok" && S && S.key === key) warm(c); });
   }
 }
 

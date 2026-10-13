@@ -5,25 +5,25 @@ import * as store from "./store.js";
 import { decodeLabelPNG } from "./png.js";
 
 // LRU caches. Decoded images are limited by total pixels (phones), the rest by count.
-const PIXEL_BUDGET = 28e6;                       // decoded frame pixels kept at once (about 28 x 1024² images)
-const LIMITS = { l: 16, m: 32 };
-const caches = { f: new Map(), l: new Map(), m: new Map() }, fpx = new Map();
+// Decoded data kept at once, in pixels per kind: frames (about 28 × 1024² images), label images, mask outlines.
+// Measured in pixels rather than counted, so decks of small images keep several cards ready (prefetch()).
+const BUDGET = { f: 28e6, l: 12e6, m: 16e6 };
+const caches = { f: new Map(), l: new Map(), m: new Map() }, weights = new Map();
+const weightOf = (kind, v) => (kind === "f" ? v.w * v.h : kind === "l" ? v.width * v.height : v.px || 0);
 function cached(key, make) {
   const kind = key[0], cache = caches[kind];
   if (cache.has(key)) { const v = cache.get(key); cache.delete(key); cache.set(key, v); return v; }
   const v = make();
-  v.catch(() => { cache.delete(key); fpx.delete(key); });
+  v.catch(() => { cache.delete(key); weights.delete(key); });
   cache.set(key, v);
-  if (kind === "f") {
-    v.then((src) => {
-      fpx.set(key, src.w * src.h);
-      let total = 0; for (const n of fpx.values()) total += n;
-      for (const k of cache.keys()) {             // oldest first; never the one just loaded
-        if (total <= PIXEL_BUDGET || k === key) break;
-        total -= fpx.get(k) || 0; cache.delete(k); fpx.delete(k);
-      }
-    }).catch(() => {});
-  } else while (cache.size > LIMITS[kind]) cache.delete(cache.keys().next().value);
+  v.then((val) => {
+    weights.set(key, weightOf(kind, val));
+    let total = 0; for (const k of cache.keys()) total += weights.get(k) || 0;
+    for (const k of cache.keys()) {               // oldest first; never the one just loaded
+      if (total <= BUDGET[kind] || k === key) break;
+      total -= weights.get(k) || 0; cache.delete(k); weights.delete(k);
+    }
+  }).catch(() => {});
   return v;
 }
 export const canvas2d = (w, h) => (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h) : Object.assign(document.createElement("canvas"), { width: w, height: h }));
@@ -158,7 +158,7 @@ function fillCanvas({ width: w, height: h, labels: L }, value, color) {
 export function maskLayer(deckKey, path, value, color, fill) {
   return cached(`m|${deckKey}|${path}|${value || 0}|${fill ? color : ""}`, async () => {
     const lab = await labels(deckKey, path);
-    return { outline: outlinePath(lab, value), fill: fill ? fillCanvas(lab, value, color) : null };
+    return { outline: outlinePath(lab, value), fill: fill ? fillCanvas(lab, value, color) : null, px: (lab.width * lab.height) / (fill ? 1 : 8) };
   });
 }
 
@@ -202,14 +202,27 @@ export class CardCanvas {
     this.colors = channelColors(channelsOf(rec.deck));
     this.cview = this.nch > 1 ? cview : "one"; this.chan = Math.min(chan, this.nch - 1);
     const key = rec.key, colors = Object.fromEntries(rec.deck.sources.map((s) => [s.name, s.color]));
-    const [, layers] = await Promise.all([this.ensure(frame), Promise.all(card.overlays.map(async (o) => {
+    const layerOf = async (o) => {
       const color = colors[o.source] || "#fff";
       if (o.shape !== "mask") return { o, color };
       return { o, color, ...(await maskLayer(key, o.mask, o.value, color, o.style === "fill")) };
-    }))]);
+    };
+    // The frame on screen first; masks of the other time points follow, then the card is drawn again.
+    const now = (o) => o.frame === undefined || o.frame === frame, done = new Map();
+    const [, first] = await Promise.all([this.ensure(frame), Promise.all(card.overlays.filter(now).map(layerOf))]);
     if (t !== this.token) return false;
-    this.layers = layers; this.loaded = true;
+    first.forEach((L) => done.set(L.o, L));
+    this.layers = card.overlays.filter((o) => done.has(o)).map((o) => done.get(o)); this.loaded = true;
     this.resize(rect || viewRect(card));
+    const later = card.overlays.filter((o) => !now(o));
+    if (later.length) {
+      Promise.all(later.map(layerOf)).then((more) => {
+        if (t !== this.token) return;
+        more.forEach((L) => done.set(L.o, L));
+        this.layers = card.overlays.filter((o) => done.has(o)).map((o) => done.get(o));
+        this.draw();
+      }).catch(() => {});
+    }
     for (let f = 0; f < card.frames.length; f++) if (f !== frame) this.ensure(f).catch(() => {});   // the other time points, quietly
     return true;
   }
