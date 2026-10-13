@@ -5,7 +5,7 @@ import { writeZip } from "./zip.js";
 import { answerDefs } from "./deck.js";
 import { annotator } from "./settings.js";
 
-export const APP_VERSION = "0.11.4";
+export const APP_VERSION = "0.11.5";
 const csvCell = (v) => {
   const s = v === undefined || v === null ? "" : String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

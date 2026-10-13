@@ -28,8 +28,9 @@ const short = (name) => name.split("/").pop();
 // errors: [{name, errors}] zips that aren't decks (an AI can fix those); fail: the last check couldn't read the folder
 // or a zip in it (Drive slow or offline: not the zips' fault), failAt its time; available: [{name, size, update}] zips
 // waiting for a tap (phones)
-const st = { status: "off", at: "", msg: "", note: "", quiet: false, found: 0, skipped: 0, added: [], updated: [], errors: [], fail: "", failAt: "",
-             available: prefs.get("decks.available", []) };
+// While checking: msg what it is doing now, since when (a live timer), hint (what it waits for), prog [done, total].
+const st = { status: "off", at: "", msg: "", since: 0, hint: "", prog: null, note: "", quiet: false, found: 0, skipped: 0, added: [], updated: [], errors: [],
+             fail: "", failAt: "", available: prefs.get("decks.available", []) };
 const listeners = new Set(), handles = new Map();     // zip name -> file handle, from the last listing (this session)
 let dir = null, lost = false, running = null, lastRun = 0, runId = 0;
 
@@ -38,6 +39,25 @@ export const isOn = () => supported() && prefs.get("decks.on", false);
 export const folderName = () => (dir ? dir.name : prefs.get("decks.name", ""));
 export function onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 function set(patch) { Object.assign(st, patch); listeners.forEach((fn) => { try { fn(st); } catch (e) { console.error(e); } }); }
+
+// What the last checks did, step by step with times ("What happened"), kept across restarts.
+let log = prefs.get("decks.log", []);
+export const activity = () => log;
+function logLine(text) {
+  log = [...log, `${new Date().toTimeString().slice(0, 8)}  ${text}`].slice(-80);
+  prefs.set("decks.log", log);
+}
+const secs = (ms) => `${ms < 10000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)} s`;
+// One run's view of the hooman's screen: step (a new step: the timer starts again), set (update it), line (the log).
+// A run that was stopped or replaced says nothing.
+function runUI(my) {
+  const live = () => my === runId;
+  return {
+    step: (msg, extra = {}) => { if (live()) set({ status: "checking", msg, since: Date.now(), hint: "", prog: null, ...extra }); },
+    set: (patch) => { if (live()) set(patch); },
+    line: (text) => { if (live()) logLine(text); },
+  };
+}
 
 // The zip a deck came from (for "finish from the decks folder").
 export function zipOf(deckKey) {
@@ -79,10 +99,10 @@ export async function choose() {
   const h = await window.showDirectoryPicker({ id: "hooman-decks", mode: "readwrite", startIn: "documents" });
   dir = h; lost = false;
   prefs.set("decks.on", true); prefs.set("decks.name", h.name); prefs.set("decks.seen", {}); prefs.set("decks.available", []);
-  set({ status: "checking", quiet: false, msg: `Looking for decks in “${h.name}”…`, note: "", available: [] });
+  set({ status: "checking", quiet: false, msg: `Looking for decks in “${h.name}”`, since: Date.now(), hint: "", prog: null, note: "", available: [] });
   try { await saveHandle(NAME, h); }
   catch (e) { console.warn("decks folder: could not keep the folder", e); set({ note: "This browser couldn't remember the folder, so it is used until the app closes." }); }
-  return check({ force: true, fresh: true });
+  return check({ force: true, fresh: true, why: "you chose the folder" });
 }
 export async function turnOff() {
   stop(true);
@@ -96,27 +116,34 @@ export async function reconnect() {
   let p = "denied";
   try { p = await dir.requestPermission({ mode: "readwrite" }); } catch (e) { console.warn("decks folder: permission", e); }
   if (p !== "granted") {
+    logLine("Reconnect: the phone didn't give access");
     set({ status: "paused", msg: "The phone didn't give access. In Settings, tap Turn off, then Choose a folder to pick it again." });
     return "denied";
   }
-  return check({ force: true, fresh: true });
+  return check({ force: true, fresh: true, why: "you reconnected" });
 }
 // Chrome drops folder access when the app has been in the background a while (one-time permissions). Called
 // inside the hooman's next tap: asks for it again (a phone that kept the permission answers at once, no prompt).
-export async function regain() {
-  if (!isOn()) return false;
-  if (!dir && !lost) { const r = await loadHandle(NAME); dir = r.handle || null; lost = r.lost || false; }
-  if (!dir) return false;
-  try {
-    if ((await dir.queryPermission({ mode: "readwrite" })) === "granted") return true;
-    if ((await dir.requestPermission({ mode: "readwrite" })) !== "granted") return false;
-  } catch { return false; }
-  check({ force: true, fresh: true, quiet: true });
-  return true;
+// andCheck false: the tap itself reads the folder ("Finish now"). Two asks in one tap share one prompt.
+let regaining = null;
+export function regain(andCheck = true) {
+  return (regaining = regaining || (async () => {
+    if (!isOn()) return false;
+    if (!dir && !lost) { const r = await loadHandle(NAME); dir = r.handle || null; lost = r.lost || false; }
+    if (!dir) return false;
+    try {
+      if ((await dir.queryPermission({ mode: "readwrite" })) === "granted") return true;
+      if ((await dir.requestPermission({ mode: "readwrite" })) !== "granted") { logLine("A tap asked for access to the folder: the phone said no"); return false; }
+    } catch { return false; }
+    logLine("A tap asked for access to the folder again: granted");
+    if (andCheck) check({ force: true, fresh: true, quiet: true, why: "access came back after a tap" });
+    return true;
+  })().finally(() => { regaining = null; }));
 }
 
 // Drop the running check or load (its results are ignored if it ever finishes).
 export function stop(silent = false) {
+  if (running) logLine(silent ? "(the running check was dropped for a new one)" : "Stopped: you tapped Stop");
   runId++; running = null;
   if (!silent) set({ status: "ok", msg: "", quiet: false, note: "Stopped. Tap Check now to try again." });
 }
@@ -138,38 +165,50 @@ async function pool(items, n, fn) {
   let i = 0;
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) await fn(items[i++]); }));
 }
-async function entriesOf(h, label, onSlow) {
+async function entriesOf(h, label, ui) {
   for (let again = 0; ; again++) {
-    const got = [], it = h.entries();
+    const got = [], it = h.entries(), t0 = performance.now(), ms = again ? listMs() * 1.5 : listMs();
+    ui.step(`Asking Google Drive for the files in “${label}”`,
+            { hint: again ? `asked again; gives up after ${secs(ms)}` : `Drive usually answers in seconds; asks again after ${secs(ms)}` });
     try {
       for (;;) {
-        const { value, done } = await within(it.next(), again ? listMs() * 1.5 : listMs(), `Listing “${label}”`);
-        if (done) return got;
+        const { value, done } = await within(it.next(), ms, `Listing “${label}”`);
+        if (done) { ui.line(`“${label}”: ${got.length} file${got.length === 1 ? "" : "s"} listed in ${secs(performance.now() - t0)}`); return got; }
         got.push(value);
       }
-    } catch (e) { if (e.name !== "TimeoutError" || again) throw e; onSlow(label); }
+    } catch (e) {
+      if (e.name !== "TimeoutError" || again) throw e;
+      ui.line(`“${label}”: Google Drive didn't answer in ${secs(ms)}, asking again`);
+    }
   }
 }
-async function deckZips(d, onFound, onSlow = () => {}) {
+async function deckZips(d, ui) {
   const out = [];
   let skipped = 0;
   const t0 = performance.now();
   const list = async (h, prefix, depth) => {
     const subs = [];
-    for (const [name, e] of await entriesOf(h, prefix ? prefix.slice(0, -1) : d.name, onSlow)) {
+    for (const [name, e] of await entriesOf(h, prefix ? prefix.slice(0, -1) : d.name, ui)) {
       if (e.kind === "directory") { if (depth < 4 && name !== "results" && !name.startsWith(".")) subs.push(list(e, `${prefix}${name}/`, depth + 1)); }
-      else if (isDeckZip(name)) { out.push({ name: prefix + name, handle: e }); onFound(out.length); }
+      else if (isDeckZip(name)) out.push({ name: prefix + name, handle: e });
       else if (/\.answers\.zip$|^hooman-status\.|^processed\.json$/i.test(name)) skipped++;
     }
     await Promise.all(subs);
   };
   await list(d, "", 0);
   const t1 = performance.now();
+  let n = 0;
+  if (out.length) ui.step(`Getting the size and date of ${out.length} deck zip${out.length === 1 ? "" : "s"}`, { hint: "from Google Drive, nothing is downloaded", prog: [0, out.length] });
   await pool(out, 6, async (z) => {
     try { z.file = await within(z.handle.getFile(), 60000, `Getting ${short(z.name)}`); }
-    catch (e) { if (e.name !== "TimeoutError" && e.name !== "NotReadableError") throw e; z.unread = `${short(z.name)}: ${e.message}`; }
+    catch (e) {
+      if (e.name !== "TimeoutError" && e.name !== "NotReadableError") throw e;
+      z.unread = `${short(z.name)}: ${e.message}`; ui.line(`${z.unread} (tried again next check)`);
+    }
+    ui.set({ prog: [++n, out.length] });
   });
   const t2 = performance.now();
+  if (out.length) ui.line(`Size and date of ${out.length} zip${out.length === 1 ? "" : "s"} in ${secs(t2 - t1)}`);
   const zips = out.filter((z) => z.file).sort((x, y) => y.file.lastModified - x.file.lastModified);
   return Object.assign(zips, { skipped, unread: out.filter((z) => !z.file).map((z) => ({ name: z.name, msg: z.unread })), timing: { list: t1 - t0, info: t2 - t1 } });
 }
@@ -185,27 +224,28 @@ function failed(e, mine) {
 
 // openKey: the deck on screen (not updated under the hooman's hands; the next check takes it).
 // quiet: a background check (no progress banner on the home screen). fresh: drop a check that may have hung.
-export function check({ force = false, openKey = null, quiet = false, fresh = false } = {}) {
+// why: what started it, for the log.
+export function check({ force = false, openKey = null, quiet = false, fresh = false, why = "" } = {}) {
   if (!isOn()) return Promise.resolve();
   if (fresh) stop(true);
   if (running) return running;
   if (!force && Date.now() - lastRun < AGAIN) return Promise.resolve();
-  const my = ++runId, mine = (patch) => { if (my === runId) set(patch); };
+  const my = ++runId, mine = (patch) => { if (my === runId) set(patch); }, ui = runUI(my);
   running = (async () => {
     try {
+      ui.line(`Check${why ? `: ${why}` : ""}`);
+      ui.step(`Opening “${folderName()}”`, { quiet, note: "", hint: "asking the phone for access" });
       const d = await folder();
       if (my !== runId) return;
-      if (!d) return mine({ status: "paused", quiet: false, fail: "", msg: lost || (dir ? "" : "Tap Reconnect to choose the folder again.") });
+      if (!d) { ui.line("No access to the folder: it needs a tap (Reconnect)"); return mine({ status: "paused", quiet: false, fail: "", msg: lost || (dir ? "" : "Tap Reconnect to choose the folder again.") }); }
       const t0 = performance.now();
-      mine({ status: "checking", quiet, msg: `Looking for decks in “${d.name}”…`, note: "" });
-      const zips = await deckZips(d, (n) => mine({ msg: `Looking for decks in “${d.name}”… ${n} found` }),
-                                  (label) => mine({ msg: `Google Drive is slow. Asking again for “${label}”…` }));
+      const zips = await deckZips(d, ui);
       if (my !== runId) return;
       handles.clear(); zips.forEach((z) => handles.set(z.name, z.handle));
       const seen = prefs.get("decks.seen", {}), decks = new Set((await store.listDecks()).map((r) => r.key));
       const added = [], updated = [], errors = [], unread = zips.unread.map((u) => u.msg);
       const available = st.available.filter((a) => zips.unread.some((u) => u.name === a.name));   // still waiting: Drive didn't say
-      let found = 0, reading = 0;
+      let found = 0, reading = 0, waiting = 0;
       for (const { name, file } of zips) {
         found++;
         let was = seen[name];
@@ -221,12 +261,14 @@ export function check({ force = false, openKey = null, quiet = false, fresh = fa
           || (was.errors && was.errors.some((m) => /could not read the zip|could not be read/i.test(m)));
         const resume = was && was.deck && loadingOf(was.deck) && !loadingOf(was.deck).active;
         if (!changed && !resume) { if (was.errors) errors.push({ name, errors: was.errors }); continue; }
-        if (!resume && file.size > autoMax()) { available.push({ name, size: file.size, mod: file.lastModified, update: !!(was && was.deck) }); continue; }
-        mine({ msg: `Reading ${short(name)} (${found} of ${zips.length}${file.size > 5e6 ? `, ${MB(file.size)}: files on Drive download first` : ""})…` });
+        if (!resume && file.size > autoMax()) {
+          if (!st.available.some((a) => a.name === name)) waiting++;
+          available.push({ name, size: file.size, mod: file.lastModified, update: !!(was && was.deck) }); continue;
+        }
         const r0 = performance.now();
         let r;
-        try { r = await within(take(file, was, openKey), 15 * 60000, `Reading ${short(name)}`); }
-        catch (e) { if (e.name !== "TimeoutError") throw e; r = { unread: e.message }; }
+        try { r = await within(read(name, file, was, openKey, false, ui, `${found} of ${zips.length}`), 15 * 60000, `Reading ${short(name)}`); }
+        catch (e) { if (e.name !== "TimeoutError") throw e; r = { unread: e.message }; ui.line(`${short(name)}: ${e.message} (tried again next check)`); }
         reading += performance.now() - r0;
         if (my !== runId) return;
         if (r.later) continue;                                  // the deck on screen: next check
@@ -237,39 +279,66 @@ export function check({ force = false, openKey = null, quiet = false, fresh = fa
         if (r.updated) updated.push(r.updated);
         prefs.set("decks.seen", seen);
       }
+      if (waiting) ui.line(`${waiting} new zip${waiting > 1 ? "s" : ""} over ${MB(autoMax())} wait${waiting > 1 ? "" : "s"} for a tap on the home screen (nothing downloaded)`);
       lastRun = Date.now();
       prefs.set("decks.available", available);
-      const at = new Date().toISOString();
+      const at = new Date().toISOString(), total = performance.now() - t0;
+      ui.line(`Done in ${secs(total)}: ${found} deck zip${found === 1 ? "" : "s"}${added.length ? `, ${added.length} new` : ""}${updated.length ? `, ${updated.length} updated` : ""}${unread.length ? `, ${unread.length} couldn't be read` : ""}`);
       mine({ status: "ok", msg: "", quiet: false, at, found, skipped: zips.skipped, added, updated, errors, available,
              fail: unread.length ? `${unread.join("; ")}. Google Drive may be slow, or the zip is still uploading: try again in a minute.` : "", failAt: unread.length ? at : "",
-             timing: { ...zips.timing, reading, total: performance.now() - t0 } });
+             timing: { ...zips.timing, reading, total } });
     } catch (e) {
-      if (my === runId) failed(e, mine);
+      if (my === runId) { logLine(`Couldn't finish: ${(e && e.message) || e}`); failed(e, mine); }
     } finally { if (my === runId) running = null; }
   })();
   return running;
 }
 
-// From a tap: load one zip that was waiting ("tap to load"), or finish a deck's saving from its zip.
-// Resolves the deck's key (or null).
-export function load(name, openKey = null) {
+// One zip from the folder: read it (a zip on Google Drive downloads first) and take it, with what happened in the log.
+async function read(name, file, was, openKey, asked, ui, of = "") {
+  ui.step(`Reading ${short(name)}`, { hint: `${of ? `${of} · ` : ""}${MB(file.size)}${file.size > 5e6 ? ": Google Drive downloads it first" : ""}` });
+  const t0 = performance.now();
+  const r = await take(file, was, openKey, asked, (n, total) => ui.set({ prog: [n, total] }));
+  const took = secs(performance.now() - t0), z = short(name);
+  ui.line(r.unread ? `${r.unread} (tried again next time)` : r.errors ? `${z}: not a deck yet (${r.errors[0]}${r.errors.length > 1 ? ` and ${r.errors.length - 1} more` : ""})`
+    : r.later ? `${z}: changed; the deck is open, so it updates after you leave it`
+    : r.added ? `${z}: new deck “${r.added}” (${took})` : r.updated ? `${z}: updated “${r.updated}”, answers kept (${took})`
+    : r.finishing ? `${z}: read in ${took}; the rest of the deck is being saved on the phone` : `${z}: nothing new (${took})`);
+  return r;
+}
+
+// The zip at a path in the folder, asked for by name (one question to Drive, not a listing of the whole folder).
+async function zipAt(d, name) {
+  try {
+    let h = d;
+    for (const p of name.split("/").slice(0, -1)) h = await within(h.getDirectoryHandle(p), listMs(), `Opening “${p}”`);
+    return await within(h.getFileHandle(short(name)), listMs(), `Finding ${short(name)}`);
+  } catch (e) {
+    if (e && (e.name === "NotFoundError" || e.name === "TypeMismatchError")) throw new Error(`${short(name)} isn't in the decks folder any more`);
+    throw e;
+  }
+}
+
+// From a tap: load one zip that was waiting ("tap to load"), or finish a deck's saving from its zip ("Finish now").
+// Resolves the deck's key (or null). why: what was tapped, for the log.
+export function load(name, openKey = null, why = "you tapped it") {
   stop(true);
-  const my = ++runId, mine = (patch) => { if (my === runId) set(patch); };
+  const my = ++runId, mine = (patch) => { if (my === runId) set(patch); }, ui = runUI(my);
+  ui.step(`Getting ${short(name)} from your folder`, { quiet: false });
   running = (async () => {
     try {
+      ui.line(`Load ${short(name)}: ${why}`);
       let h = handles.get(name);
-      if (!h) {                                                 // after a restart: list the folder first (no downloads)
+      if (!h) {                                                 // after a restart: ask the folder for that one zip
         const d = await folder();
-        if (!d) { mine({ status: "paused", quiet: false, msg: "" }); return null; }
-        mine({ status: "checking", quiet: false, msg: `Looking for ${short(name)}…` });
-        (await deckZips(d, () => {}, (label) => mine({ msg: `Google Drive is slow. Asking again for “${label}”…` }))).forEach((z) => handles.set(z.name, z.handle));
-        h = handles.get(name);
+        if (!d) { ui.line("No access to the folder: it needs a tap (Reconnect)"); mine({ status: "paused", quiet: false, msg: "" }); return null; }
+        ui.step(`Asking Google Drive for ${short(name)}`, { hint: `Drive usually answers in seconds; gives up after ${secs(listMs())}` });
+        h = await zipAt(d, name);
       }
-      if (!h) throw new Error(`${short(name)} isn't in the decks folder any more`);
+      ui.step(`Asking Google Drive for ${short(name)}`, { hint: "its size and date" });
       const file = await within(h.getFile(), 60000, `Getting ${short(name)}`);
-      mine({ status: "checking", quiet: false, msg: `Loading ${short(name)} (${MB(file.size)} from your folder)…` });
       const seen = prefs.get("decks.seen", {});
-      const r = await take(file, seen[name], openKey, true);
+      const r = await read(name, file, seen[name], openKey, true, ui);
       if (my !== runId) return null;
       if (r.unread) {                                           // still waits for a tap
         mine({ status: "ok", msg: "", quiet: false, failAt: new Date().toISOString(), fail: `${r.unread}. Google Drive may be slow or offline: try again in a minute.` });
@@ -282,7 +351,7 @@ export function load(name, openKey = null) {
              errors: [...st.errors.filter((x) => x.name !== name), ...(r.errors ? [{ name, errors: r.errors }] : [])] });
       return r.deck || null;
     } catch (e) {
-      if (my === runId) failed(e, mine);
+      if (my === runId) { logLine(`Couldn't get ${short(name)}: ${(e && e.message) || e}`); failed(e, mine); }
       return null;
     } finally { if (my === runId) running = null; }
   })();
@@ -311,9 +380,9 @@ export function hide(name) {
 
 // One zip: import it, update its deck, or finish its saving. asked: the hooman tapped it (update even if not newer).
 // unread: the zip couldn't be read (Drive, the phone): not an error of the zip, tried again next time.
-async function take(file, was, openKey, asked = false) {
+async function take(file, was, openKey, asked = false, onProgress) {
   let imported;
-  try { imported = await importBlob(file); }
+  try { imported = await importBlob(file, onProgress); }
   catch (e) {
     if (e.errors && !e.io) return { errors: e.errors };
     const m = (e.errors && e.errors[0]) || e.message || String(e);
@@ -326,7 +395,7 @@ async function take(file, was, openKey, asked = false) {
   // card, where cards whose files couldn't be read are missing: save this zip whole, which fills them in.
   if (imported.lazy && ((lo && !lo.active) || (asked && !(await store.hasArchive(id))))) {
     loadInBackground(existing, imported.lazy);                  // saving never changes the deck: fine while it is open
-    return { deck: id };
+    return { deck: id, finishing: true };
   }
   if (id === openKey) return { later: true };                   // an update waits until the deck isn't on screen
   // First sight of a deck that is already here: update only if the zip is newer than the deck on the phone.
@@ -338,6 +407,6 @@ async function take(file, was, openKey, asked = false) {
 
 // openKey(): the key of the deck on screen, if any.
 export function start(openKey) {
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check({ openKey: openKey(), quiet: true }); });
-  check({ force: true, openKey: openKey(), quiet: true });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check({ openKey: openKey(), quiet: true, why: "the app came back to the front" }); });
+  check({ force: true, openKey: openKey(), quiet: true, why: "the app opened" });
 }

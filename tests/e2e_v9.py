@@ -44,6 +44,8 @@ PICK = """if (window.FileSystemHandle) {
   };
   const getFile = FileSystemFileHandle.prototype.getFile;
   FileSystemFileHandle.prototype.getFile = async function () {
+    const slow = +(localStorage.getItem("test:slowfile") || 0);
+    if (slow) await new Promise((r) => setTimeout(r, slow));
     const f = await getFile.call(this);
     if (localStorage.getItem("test:unreadable") !== this.name) return f;
     const bad = () => Promise.reject(new DOMException("The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.", "NotReadableError"));
@@ -202,9 +204,16 @@ def main():
         note = page.locator(".card-note").inner_text()
         check("can't be shown" not in note and "isn't on the phone yet" in note and page.locator(".card-note [data-act=finishzip]").count() == 1,
               f"not 'can't be shown' any more: the card offers Finish now ({note.splitlines()[0]!r})")
-        page.locator(".card-note [data-act=finishzip]").click()
+        page.evaluate("window.__lists = 0; localStorage.setItem('test:slowfile', '2500')")
+        page.locator(".card-note [data-act=finishzip]").click(); page.wait_for_timeout(600)
+        note = page.locator(".card-note").inner_text() if page.locator(".card-note").count() else ""
+        check("Getting the rest of the deck" in note and "folder-big.hooman.zip" in note and page.locator(".card-note [data-since]").count() == 1,
+              f"Finish now shows what it is doing on the card, with a running timer ({note!r})")
+        page.screenshot(path=OUT / "96_finish_now_progress.png")
+        page.evaluate("localStorage.removeItem('test:slowfile')")
         page.locator(".cardfoot", has_text="c300").wait_for(timeout=60000)
         check(page.locator(".card canvas").count() == 1 and page.locator(".card-note").count() == 0, "one tap: the deck is saved from the folder and the card shows")
+        check(page.evaluate("window.__lists") == 0, f"Finish now asked for that one zip, without listing the folder ({page.evaluate('window.__lists')} listings)")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
 
         print("The permission lapses: one tap brings it back")
@@ -305,7 +314,16 @@ def main():
         check(page.evaluate("window.__lists") == 2 and page.locator(".folder-line.warn").count() == 0 and "1 deck" in page.locator(".folder-line").inner_text(),
               f"a listing that stalls is asked for again, and the second answer is used ({page.evaluate('window.__lists')} listings)")
         page.evaluate("localStorage.setItem('test:hang', '2')")
-        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(3500)
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(400)
+        busy = page.locator(".folder-line.busy")
+        txt = busy.inner_text() if busy.count() else ""
+        check("Asking Google Drive for the files in “slow”" in txt and "asks again after" in txt and busy.locator("[data-since]").count() == 1,
+              f"while it waits, the line says what it asks Drive for, with a running timer ({txt!r})")
+        page.screenshot(path=OUT / "94_decks_live_step.png")
+        page.wait_for_timeout(1100)
+        txt = busy.inner_text() if busy.count() else ""
+        check("asked again" in txt, f"then that it asked again ({txt!r})")
+        page.wait_for_timeout(2000)
         line = page.locator(".folder-line").inner_text()
         check(page.locator(".folder-line.warn").count() == 1 and "didn't answer" in line and "try again" in line, f"then the folder line says Drive didn't answer ({line!r})")
         check(page.locator(".folder-errs").count() == 0 and page.locator(".deckrow", has_text="Slow one").count() == 1,
@@ -315,6 +333,12 @@ def main():
         page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
         check("couldn't read it" in page.locator(".sheet #decks-row").inner_text(), "Settings says the folder couldn't be read, and why")
         page.keyboard.press("Escape"); page.wait_for_timeout(300)
+        page.locator(".folder-log").click(); page.wait_for_selector(".sheet .activity")
+        log = page.locator(".sheet .activity").inner_text()
+        check("Check: you tapped Check" in log and "didn't answer in" in log and "asking again" in log and "Couldn't finish" in log,
+              "What happened lists each step, newest first, with times")
+        page.wait_for_timeout(500); page.screenshot(path=OUT / "95_decks_what_happened.png")
+        page.locator(".sheet [data-l=close]").click(); page.wait_for_timeout(300)
         page.locator(".folder-line.warn").click(); page.wait_for_timeout(1500)
         check(page.locator(".folder-line.warn").count() == 0 and "1 deck" in page.locator(".folder-line").inner_text(), "a tap tries again, and it's back")
 
