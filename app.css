@@ -338,6 +338,20 @@ ul.steps { padding-left: 18px; }
 .folder-line.busy { border-color: var(--focus); }
 .folder-line .btn { min-height: 36px; flex: none; padding: 0 12px; font-size: 13px; }
 .folder-errs { display: block; margin-top: 6px; color: var(--yellow); font-size: 12px; }
+.folder-log { display: block; margin-top: 6px; font-size: 12px; }
+.folder-line .fl-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; background: none; border: 0; color: inherit; font: inherit; text-align: left; }
+.folder-line .fl-main > b { flex: none; color: var(--muted); font-size: 18px; }
+.fl-step { flex: 1; min-width: 0; display: grid; gap: 3px; line-height: 1.35; }
+.fl-sub { color: var(--muted); font-size: 12px; }
+.fl-sub .mono { color: var(--text); }
+.fl-bar { display: block; height: 4px; margin-top: 2px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.fl-bar > i { display: block; height: 100%; background: var(--focus); transition: width .2s; }
+.folder-line .fl-ico { flex: none; }
+.folder-line > .fl-step { flex: 1; }
+.card-note .fl-card { margin-top: 6px; text-align: left; }
+.card-note .fl-card .fl-what { color: var(--text); }
+.activity { list-style: none; padding: 0; margin: 10px 0; max-height: 40vh; overflow-y: auto; display: grid; gap: 4px; }
+.activity li { font: 12px/1.45 var(--mono); color: var(--muted); background: var(--card); padding: 6px 8px; border-radius: 4px; word-break: break-word; }
 .tabs-row { margin: 18px 0 8px; }
 .seg.tabs button { min-height: 44px; padding: 0 16px; font-size: 13px; }
 .list-div { font: 500 11px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin: 8px 2px 0; }

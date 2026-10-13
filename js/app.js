@@ -190,16 +190,27 @@ function zipMenu(name) {
   };
 }
 
+// What the decks folder is doing: the step, a live timer (the clock in start() ticks [data-since]), what it waits for,
+// and a bar when it counts. Shown on the home screen, on a card that is finishing, and in "What happened".
+const ago = (since) => `${Math.max(0, Math.round((Date.now() - since) / 1000))} s`;
+function stepHTML(s) {
+  const p = s.prog && s.prog[1] ? Math.round((100 * s.prog[0]) / s.prog[1]) : -1;
+  return `<span class="fl-what">${esc(s.msg || "Checking")}…</span>
+    <small class="fl-sub">${s.since ? `<span class="mono" data-since="${s.since}">${ago(s.since)}</span>` : ""}${s.hint ? ` · ${esc(s.hint)}` : ""}</small>
+    ${p >= 0 ? `<i class="fl-bar"><i style="width:${p}%"></i></i>` : ""}`;
+}
 function folderLine() {
   if (!dfolder.isOn()) return "";
   const s = dfolder.status(), name = dfolder.folderName();
-  if (s.status === "checking") return `<div class="folder-line busy"><span>📂 ${esc(s.msg || `Checking “${name}”…`)}</span><button class="btn quiet" data-act="stopcheck">Stop</button></div>`;
+  if (s.status === "checking") return `<div class="folder-line busy"><button class="fl-main" data-act="folderlog" aria-label="What the decks folder is doing">
+      <span class="fl-ico">📂</span><span class="fl-step">${stepHTML(s)}</span><b aria-hidden="true">›</b></button><button class="btn quiet" data-act="stopcheck">Stop</button></div>`;
   if (s.status === "paused") return `<button class="folder-line warn" data-act="checkdecks"><span>📂 “${esc(name)}” needs a tap to be read again</span><b>Reconnect</b></button>`;
   const n = s.found, errs = s.errors.length;
   // fail: Drive didn't answer (the decks on the phone are fine); errs: zips that aren't decks (an AI can fix those)
   return `${s.fail ? `<button class="folder-line warn" data-act="checkdecks" aria-label="Try the decks folder again"><span>📂 ${esc(name)} · Google Drive didn't answer${s.failAt ? ` at ${hhmm(s.failAt)}` : ""} · tap to try again</span><b aria-hidden="true">↻</b></button>`
     : `<button class="folder-line" data-act="checkdecks" aria-label="Check the decks folder now"><span>📂 ${esc(name)}${s.at ? ` · ${n} deck${n === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : " · tap to check"}</span><b aria-hidden="true">↻</b></button>`}
-    ${errs ? `<button class="link-btn folder-errs" data-act="folderrors">${errs} zip${errs > 1 ? "s" : ""} in the folder couldn't be opened: see why</button>` : ""}`;
+    ${errs ? `<button class="link-btn folder-errs" data-act="folderrors">${errs} zip${errs > 1 ? "s" : ""} in the folder couldn't be opened: see why</button>` : ""}
+    ${s.fail ? `<button class="link-btn folder-log" data-act="folderlog">What happened</button>` : ""}`;
 }
 
 async function home() {
@@ -257,7 +268,7 @@ async function home() {
     if (b.dataset.act === "tab") { prefs.set("homeTab", b.dataset.tab); return home(); }
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
        photos: photosSheet, drive: openFromDrive, install: installFlow, installno: () => { prefs.set("installNo", true); home(); },
-       repick: pickZipAgain, checkdecks: decksCheckNow, stopcheck: () => dfolder.stop(), folderrors: () => decksAction("errors"),
+       repick: pickZipAgain, checkdecks: decksCheckNow, stopcheck: () => dfolder.stop(), folderrors: () => decksAction("errors"), folderlog: folderLog,
        loadzip: () => loadZip(b.dataset.zip), finishzip: () => loadZip(b.dataset.zip, true), connect: () => decksAction("on"),
        add: addSheet, help: appHelp, rowmenu: () => rowMenu(b.dataset.key), zipmenu: () => zipMenu(b.dataset.zip) })[b.dataset.act]();
   };
@@ -406,13 +417,14 @@ function decksRow() {
   const s = dfolder.status(), on = dfolder.isOn(), name = dfolder.folderName();
   const computer = !(isIOS() || isAndroid());
   if (!on) return `<div class="live-row"><div><b>📂 Decks folder</b><span>Off. Pick a folder once: every deck zip you put in it shows up here by itself${computer ? ". A Google Drive, OneDrive or Dropbox folder on this computer works too" : ""}.</span></div><button class="btn" data-decks="on">Choose a folder</button></div>`;
-  const line = s.status === "paused" ? `Paused. ${s.msg || "Tap Reconnect."}` : s.status === "checking" ? (s.msg || "Checking…")
+  const line = s.status === "paused" ? `Paused. ${s.msg || "Tap Reconnect."}` : s.status === "checking" ? `${s.msg || "Checking"}…`
     : s.fail ? `Folder “${name}” · couldn't read it${s.failAt ? ` at ${hhmm(s.failAt)}` : ""}: ${s.fail}`
     : `Folder “${name}”${s.at ? ` · ${s.found} deck zip${s.found === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : ""}${s.timing ? ` · took ${secs(s.timing.total)} (folders ${secs(s.timing.list)} · file info ${secs(s.timing.info)} · reading ${secs(s.timing.reading)})` : ""}`;
   const resultsHere = live.status().folder.status !== "off" && live.folderName() === "results";
   return `<div class="live-row"><div><b>📂 Decks folder</b><span>${esc(line)}${s.note ? `<br>${esc(s.note)}` : ""}</span></div>
       ${s.status === "paused" ? `<button class="btn" data-decks="reconnect">Reconnect</button>` : `<button class="btn quiet" data-decks="check">Check now</button>`}<button class="btn quiet" data-decks="off">Turn off</button></div>
     ${s.errors.length ? `<p style="font-size:13px;margin:6px 0 0"><button class="link-btn" data-decks="errors" style="color:var(--yellow)">${s.errors.length} zip${s.errors.length > 1 ? "s" : ""} in the folder couldn't be opened: see why</button></p>` : ""}
+    <p style="font-size:13px;margin:6px 0 0"><button class="link-btn" data-decks="log">What happened: each step of the last checks</button></p>
     ${live.canFolder() ? `<p class="muted" style="font-size:13px;margin:6px 0 0">${resultsHere ? `Your answers are saved into “results” in this folder (live save).` : `<button class="link-btn" data-decks="results">Save my answers into this folder too</button> (a “results” folder inside it, a few seconds after each answer, with a summary table your AI can read)`}</p>` : ""}`;
 }
 async function decksAction(what) {
@@ -424,8 +436,9 @@ async function decksAction(what) {
       else live.regain();                         // live save in the folder's "results" comes back with it
     }
     else if (what === "stop") dfolder.stop();
-    else if (what === "check") { await dfolder.check({ force: true, openKey: S && S.key }); decksNothingNew(); }
+    else if (what === "check") { await dfolder.check({ force: true, openKey: S && S.key, why: "you tapped Check" }); decksNothingNew(); }
     else if (what === "errors") return folderZipErrors();
+    else if (what === "log") return folderLog();
     else if (what === "results") { await live.useFolder(await dfolder.resultsFolder()); toast("Your answers now go into “results” in the decks folder"); }
   } catch (err) {
     if (err && err.name === "AbortError") toast("No folder was chosen");
@@ -449,15 +462,61 @@ function decksNothingNew() {
 }
 const secs = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
 // "Tap to load" a deck waiting in the decks folder (or finish one that wasn't fully saved), then open it.
+// "Finish now" on a card shows, in place of its buttons, what the folder is doing (the home screen's folder line
+// isn't there): the card's note is marked with the zip, and a re-drawn card ends it.
 async function loadZip(name, finish = false) {
-  const key = await dfolder.load(name, S ? S.key : null);
+  const note = finish && S ? $("#stage .card-note") : null;
+  if (note) note.dataset.finish = name;
+  const mine = () => note && note.isConnected && note.dataset.finish === name;
+  const paint = () => {
+    const s = dfolder.status();
+    if (mine() && s.status === "checking") note.innerHTML = `<b>Getting the rest of the deck</b><div class="folder-line busy fl-card"><span class="fl-ico">📂</span><span class="fl-step">${stepHTML(s)}</span></div>
+      <div class="row"><button class="btn quiet" data-act="stopcheck">Stop</button><button class="btn quiet" data-act="folderlog">Details</button></div>`;
+  };
+  const off = note ? dfolder.onStatus(paint) : null;
+  if (dfolder.status().status === "paused") await dfolder.regain(false);   // access lapsed: asked inside this tap
+  const key = await dfolder.load(name, S ? S.key : null, finish ? "you tapped Finish now" : "you tapped it");
+  off && off();
   if (!key) {
     const s = dfolder.status();
-    if (!folderZipErrors(name) && s.fail) showErrors([s.fail], [], { deck: false, title: "Couldn't get the deck from the folder" });
+    if (folderZipErrors(name)) return mine() && showCard();
+    if (mine() && (s.fail || s.status === "paused")) {
+      note.innerHTML = `<b>${s.fail ? "Couldn't get the rest of the deck" : "The decks folder needs a tap"}</b>
+        <p>${esc(s.fail || "The phone dropped access to the folder while the app was in the background.")}</p>
+        <div class="row"><button class="btn" data-act="finishzip" data-zip="${esc(name)}">${s.fail ? "Try again" : "Reconnect"}</button><button class="btn quiet" data-act="skip">Skip</button><button class="btn quiet" data-act="folderlog">Details</button></div>`;
+      return;
+    }
+    if (mine()) return showCard();                             // stopped: the card as it was
+    if (s.fail) showErrors([s.fail], [], { deck: false, title: "Couldn't get the deck from the folder" });
     return;
   }
   if (finish) { toast("Saving the rest of the deck on the phone…", 3000); if (S && S.key === key) return showCard(); }
   go(`#/deck/${encodeURIComponent(key)}`);
+}
+
+// "What happened": the decks folder's step now (live) and the last checks, newest first; Copy for a bug report.
+function folderLog() {
+  const paint = () => {
+    const s = dfolder.status(), busy = s.status === "checking", lines = dfolder.activity().slice(-40).reverse();
+    return `<h3>📂 ${esc(dfolder.folderName())}</h3>
+      ${busy ? `<div class="folder-line busy"><span class="fl-ico">📂</span><span class="fl-step">${stepHTML(s)}</span></div>`
+        : `<p style="color:var(--text)">${esc(s.status === "paused" ? "Waiting for a tap on Reconnect: the phone dropped access to the folder." : s.fail ? s.fail
+          : s.at ? `Checked at ${hhmm(s.at)}: ${s.found} deck zip${s.found === 1 ? "" : "s"}.` : "Not checked yet.")}</p>`}
+      <p class="muted" style="font-size:13px">The app asks Google Drive, through the phone, for the folder's files. When Drive is slow this waits, and the decks already on the phone work meanwhile. If it keeps waiting: check the phone is online, open the Google Drive app once, then Check now.</p>
+      <ol class="activity">${lines.map((l) => `<li>${esc(l)}</li>`).join("") || "<li>Nothing yet.</li>"}</ol>
+      <div class="row">${busy ? `<button class="btn quiet" data-l="stop">Stop</button>` : `<button class="btn" data-l="check">Check now</button>`}<button class="btn quiet" data-l="copy">Copy</button><button class="btn quiet" data-l="close">Close</button></div>`;
+  };
+  let off = () => {};
+  const sh = openSheet(paint(), { onClose: () => off() });
+  off = dfolder.onStatus(() => { sh.el.innerHTML = paint(); });
+  sh.el.onclick = async (e) => {
+    const b = e.target.closest("[data-l]");
+    if (!b) return;
+    if (b.dataset.l === "close") sh.close();
+    else if (b.dataset.l === "stop") dfolder.stop();
+    else if (b.dataset.l === "check") decksCheckNow();
+    else if (b.dataset.l === "copy" && (await copyText(dfolder.activity().join("\n")))) toast("Copied");
+  };
 }
 function decksCheckNow() { return decksAction(dfolder.status().status === "paused" ? "reconnect" : "check"); }
 
@@ -1297,6 +1356,8 @@ function onDeckClick(e) {
   if (act === "live") return liveTap();
   if (act === "repick") return pickZipAgain();
   if (act === "finishzip") return loadZip(t.dataset.zip, true);
+  if (act === "stopcheck") { dfolder.stop(); return showCard(); }
+  if (act === "folderlog") return folderLog();
   if (act === "loadinfo") { const lo = loadingOf(S.key); return toast(!lo ? "The deck is saved on the phone" : lo.active ? "Saving the deck on the phone. You can work meanwhile." : "Pick the deck's zip again to finish saving it.", 4000); }
   if (act === "play") return togglePlay();
   if (act === "export") return exportSheet(S.rec);
@@ -1868,6 +1929,7 @@ async function start() {
     if (!S && parseHash().page === "home") home();       // new decks, or the reconnect banner comes and goes
   });
   dfolder.start(() => (S ? S.key : null));
+  setInterval(() => document.querySelectorAll("[data-since]").forEach((el) => { el.textContent = ago(+el.dataset.since); }), 1000);
   // Chrome drops folder access when the app has been in the background a while, and only a tap may ask for it
   // again: the first tap after coming back (or after starting) does, for the decks folder, then live save.
   let regain = true;
