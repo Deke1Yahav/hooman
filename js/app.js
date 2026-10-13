@@ -1,7 +1,7 @@
 // Hooman in the Loop: screens, gestures and flows. No framework: one module, plain DOM.
 
 import * as store from "./store.js";
-import { importBlob, importURL, saveDeck } from "./importer.js";
+import { importBlob, importURL, saveDeck, storedCard, loadInBackground } from "./importer.js";
 import { CardCanvas, viewRect, frameSource, maskLayer, rendered, channelColors, channelsOf, framePaths } from "./view.js";
 import { answerDefs, DIRS, slug } from "./deck.js";
 import { buildExport, shareOrDownload, APP_VERSION } from "./export.js";
@@ -18,6 +18,7 @@ import * as drive from "./drive.js";
 import { readAnswers } from "./backup.js";
 import { installState, promptInstall, markInstalled, watchInstall, isIOS, isAndroid } from "./install.js";
 import * as live from "./livesave.js";
+import { loadingOf, onLoading, ensureCard, want, forgetLoading } from "./loading.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -112,12 +113,15 @@ async function route() {
 window.addEventListener("hashchange", route);
 const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
 
-// Deck records may be colour-themed copies (settings.js); this writes the stored record back.
-function saveRec(rec) {
-  if (!rec || !rec._raw) return store.putDeck(rec);
-  const raw = rec._raw;
+// Writes back what the screens change on a deck record (when it was opened, the last card, the answer buttons,
+// the last export, the order) onto the stored record, read fresh: other parts of the app write it meanwhile
+// (a big deck's background loading, live save, the team folder). Records may be colour-themed copies (settings.js).
+async function saveRec(rec) {
+  if (!rec) return;
+  const raw = await store.getDeck(rec.key);
+  if (!raw) return;
   for (const k of ["openedAt", "lastCard", "exportedAt", "order"]) if (rec[k] !== undefined) raw[k] = rec[k];
-  raw.custom = rec.custom && rec.custom.answers ? { ...rec.custom, answers: rec.custom.answers.map((a) => ({ ...a, color: untone(a.color) })) } : rec.custom;
+  raw.custom = rec._raw && rec.custom && rec.custom.answers ? { ...rec.custom, answers: rec.custom.answers.map((a) => ({ ...a, color: untone(a.color) })) } : rec.custom;
   return store.putDeck(raw);
 }
 const modeOf = (deck) => deck.mode || (deck.question ? "swipe" : "annotate");
@@ -137,12 +141,13 @@ async function home() {
     return `<button class="deckrow" data-open="${esc(d.key)}">
       <b>${esc(d.title)}</b><span class="count">${done} / ${n}</span>
       <div class="pbar"><i style="width:${pct}%"></i></div>
-      <span class="sub">${esc(d.key)}${kind} · ${esc((d.updatedAt || "").slice(0, 10))}</span></button>`;
+      <span class="sub">${esc(d.key)}${kind} · ${esc((d.updatedAt || "").slice(0, 10))}${loadNote(d.key) ? ` · <b class="loadnote">${loadNote(d.key)}</b>` : ""}</span></button>`;
   }).join("");
   app.innerHTML = `<main class="screen">
     <div class="hero"><img src="icons/icon-192.png" alt=""><div><h1>Hooman in the Loop</h1><p>The AI guesses. The hooman decides.</p></div>
       <button class="icon-btn" data-act="settings" aria-label="Settings and backup" style="margin-left:auto">⚙</button></div>
     <div id="install-slot">${installBanner()}</div>
+    ${decks.filter((d) => loadingOf(d.key) && !loadingOf(d.key).active).map((d) => `<div class="banner"><span>“${esc(d.title)}” has ${loadingOf(d.key).left} cards still to load. Pick its zip again to finish.</span><button class="btn quiet" data-act="repick">Pick the zip</button></div>`).join("")}
     ${stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this device.</span><button class="btn quiet" data-act="backup">Back up</button></div>` : ""}
     <div class="actions">
       <button class="btn" data-act="import">＋ Import deck</button>
@@ -165,7 +170,7 @@ async function home() {
     if (!b) return;
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
-       photos: photosSheet, drive: openFromDrive, install: installFlow })[b.dataset.act]();
+       photos: photosSheet, drive: openFromDrive, install: installFlow, repick: pickZipAgain })[b.dataset.act]();
   };
 }
 
@@ -234,6 +239,10 @@ async function runRestore(fn) {
 }
 
 async function backupNow(images) {
+  if (images) {
+    const still = (await store.listDecks()).find((d) => loadingOf(d.key));
+    if (still) return toast(`“${still.title}” is still loading. Back up with images when it's done (answers only works now).`, 4000);
+  }
   const sh = openSheet(`<h3>Making the backup…</h3><p>${images ? "Answers, notes, masks and every deck's images." : "Answers, notes, drawn masks and history."}</p>`, { dismissable: false });
   try {
     const b = await buildBackup({ images });
@@ -241,6 +250,29 @@ async function backupNow(images) {
     const r = await shareOrDownload(b.zip, `hooman-backup-${new Date().toISOString().slice(0, 10)}${images ? "-full" : ""}.zip`);
     if (r !== "cancelled") { markBackup(); toast(`Backed up ${b.answers} answers from ${b.decks} deck${b.decks === 1 ? "" : "s"}`); if (parseHash().page === "home") home(); }
   } catch (e) { sh.close(); showErrors([`Backup failed: ${e.message}`], []); }
+}
+
+// ---------------------------------------------------------------- big decks that are still loading (loading.js)
+function loadNote(key) {
+  const lo = loadingOf(key);
+  if (!lo) return "";
+  const pct = Math.floor((100 * (lo.total - lo.left)) / Math.max(1, lo.total));
+  return lo.active ? `loading ${pct}%` : `${lo.left} cards to load`;
+}
+function pickZipAgain() {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".zip,application/zip,application/x-zip-compressed,application/octet-stream";
+  inp.onchange = () => { const f = inp.files[0]; if (f) importFile(f); };
+  inp.click();
+}
+// The card on screen can't be shown yet: still loading (wait), broken, or not on the phone (pick the zip again).
+function showUnloaded(card, why) {
+  const stage = $("#stage");
+  if (!stage) return;
+  stage.innerHTML = `<div class="card-note">${why === "broken"
+    ? `<b>This card can't be shown.</b><p>${esc(card.broken || "")}</p><div class="row"><button class="btn" data-act="skip">Skip it</button></div>`
+    : `<b>This card isn't on the phone yet.</b><p>The app closed while this deck was loading, so ${loadingOf(S.key) ? `${loadingOf(S.key).left} cards` : "some cards"} still need their images. Pick the deck's zip again to finish; your answers stay.</p>
+       <div class="row"><button class="btn" data-act="repick">Pick the zip again</button><button class="btn quiet" data-act="skip">Skip</button></div>`}</div>`;
 }
 
 // ---------------------------------------------------------------- live save (Settings rows, deck header mark)
@@ -344,6 +376,12 @@ async function runImport(getter) {
   }
   const existing = await store.getDeck(imported.deck.id);
   if (!existing) return finishImport(imported, "new");
+  if (imported.lazy && loadingOf(existing.key)) {             // the zip of a deck that was still loading: finish it
+    const n = loadInBackground(existing, imported.lazy.source);
+    sh.close(); toast(n ? `Loading the remaining ${n} cards. You can work meanwhile.` : "This deck is complete", 3500);
+    if (S && S.key === existing.key) showCard(); else if (!S && parseHash().page === "home") home();
+    return;
+  }
   const n = (await store.answersOf(existing.key)).length;
   sh.el.innerHTML = `<h3>This deck is already here</h3>
     <p>“${esc(existing.title)}” (id <span class="mono">${esc(existing.key)}</span>) has <b>${n}</b> answer${n === 1 ? "" : "s"} on this device.</p>
@@ -371,6 +409,7 @@ async function finishImport(imported, mode, existing) {
   const w = imported.warnings;
   sh.el.innerHTML = `<h3>Ready: ${esc(rec.title)}</h3>
     <p>${rec.deck.cards.length} cards${rec.deck.question ? "" : " to annotate"}. ${mode === "update" ? "Your earlier answers are kept." : ""}</p>
+    ${rec.loadingLeft ? `<p><b style="color:var(--text)">Start now:</b> the first cards are ready, and the other ${rec.loadingLeft} load in the background while you work. Keep the app open until the deck list says it's done.</p>` : ""}
     ${w.length ? `<details><summary>${w.length} warning${w.length > 1 ? "s" : ""} (the deck still works)</summary><ul class="errors warn">${w.slice(0, 40).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
       <button class="btn quiet" data-copy>Copy warnings for the AI</button></details>` : ""}
     <div class="stack"><button class="btn" data-go>Open the deck</button></div>`;
@@ -506,6 +545,7 @@ function buildDeckScreen() {
       <button class="ghost" data-act="back">‹ ${S.revisit ? "Back" : "Decks"}</button>
       <h2>${esc(deck.title)}</h2>
       <span class="count" id="count"></span>
+      <button class="loadmark" id="loadmark" data-act="loadinfo" hidden></button>
       <button class="live-mark" id="live-mark" data-act="live" hidden></button>
       <button class="icon-btn" data-act="menu" aria-label="Deck menu">⋮</button>
     </div>
@@ -521,6 +561,9 @@ function buildDeckScreen() {
   updateChips();
   liveMark();
   cleanup.push(live.onStatus(liveMark));
+  const loadMark = () => { const el = $("#loadmark"), t = S && loadNote(S.key); if (el) { el.hidden = !t; el.textContent = t ? `⤓ ${t}` : ""; } };
+  loadMark();
+  cleanup.push(onLoading((key) => { if (S && key === S.key) loadMark(); }));
   app.onclick = onDeckClick;
   const onContrast = () => { if (S && S.view) S.view.draw(); if (Z) Z.view.draw(); };
   window.addEventListener("hooman:contrast", onContrast);
@@ -641,6 +684,15 @@ async function showCard() {
   $$("#answers .ans:not(.undo)").forEach((b) => (b.disabled = !card));
   if (undoBtn) undoBtn.disabled = S.answers.size === 0;
   if (!card) { S.cardEl = null; return showDone(); }
+  if (!card.w || card.broken) {                 // a big deck still loading: this card first
+    if (!card.broken) {
+      stage.innerHTML = `<div class="card-note"><b>Loading this card…</b></div>`;
+      const r = await ensureCard(S.key, card, (c) => storedCard(S.key, c));
+      if (!S || currentCard() !== card) return;   // the hooman moved on meanwhile
+      if (r === "missing") return showUnloaded(card, "missing");
+    }
+    if (card.broken) return showUnloaded(card, "broken");
+  }
   S.frame = 0;
   S.rec.lastCard = card.id;
   const el = document.createElement("div");
@@ -657,6 +709,7 @@ async function showCard() {
   S.view.display = displayFor(S.key, card, S.rec.deck);
   try { await S.view.show(S.rec, card, { hidden: S.hidden, cview: S.cview, chan: S.chan }); }
   catch (e) { console.error(e); toast(`Could not show this card: ${e.message}`, 4000); }
+  if (!S || currentCard() !== card) return;     // left the deck (or moved on) while the card was drawn
   S.shownAt = performance.now();
   prefetch();
   const mode = modeOf(deck);
@@ -671,6 +724,7 @@ function prefetch() {
     i = (i + 1) % S.order.length;
     const c = S.cardsById.get(S.order[i]);
     if (!c || S.answers.has(c.id)) continue;
+    if (!c.w) { want(S.key, c.id); continue; }
     framePaths(c, 0).forEach((p) => frameSource(S.key, p).catch(() => {}));   // the next card's channels
     const colors = Object.fromEntries(S.rec.deck.sources.map((s) => [s.name, s.color]));
     c.overlays.filter((o) => o.shape === "mask").forEach((o) => maskLayer(S.key, o.mask, o.value, colors[o.source], o.style === "fill").catch(() => {}));
@@ -1037,6 +1091,8 @@ function onDeckClick(e) {
   if (act === "skip") { const c = currentCard(); if (c) { S.pos = nextUnanswered(S.pos); if (S.order[S.pos] === c.id) toast("This is the last open card"); showCard(); } return; }
   if (act === "menu") return deckMenu();
   if (act === "live") return liveTap();
+  if (act === "repick") return pickZipAgain();
+  if (act === "loadinfo") { const lo = loadingOf(S.key); return toast(lo ? `${lo.total - lo.left} of ${lo.total} cards are on the phone${lo.active ? "; the rest load while you work" : ". Pick the zip again to load the rest"}.` : "All cards are loaded", 4000); }
   if (act === "play") return togglePlay();
   if (act === "export") return exportSheet(S.rec);
   if (act === "review") return go(`#/review/${encodeURIComponent(S.key)}`);
@@ -1179,7 +1235,7 @@ function deleteSheet(rec) {
     <div class="row"><button class="btn danger" data-del>Delete</button><button class="btn quiet" data-close>Cancel</button></div>`);
   sh.el.onclick = async (e) => {
     if (e.target.closest("[data-close]")) sh.close();
-    if (e.target.closest("[data-del]")) { await store.deleteDeck(rec.key); sh.close(); toast("Deleted"); go("#/"); }
+    if (e.target.closest("[data-del]")) { forgetLoading(rec.key); await store.deleteDeck(rec.key); sh.close(); toast("Deleted"); go("#/"); }
   };
 }
 
@@ -1340,6 +1396,7 @@ function wireLink(el, link, title) {
 }
 
 async function shareDeckSheet(key) {
+  if (loadingOf(key)) return toast(`This deck is still loading (${loadingOf(key).left} cards to go). Share it when it's done.`, 3500);
   const rec = await store.getDeck(key);
   const sh = openSheet(`<h3>Share this deck</h3>
     <p>Send it as a file: a <span class="mono">.hooman.zip</span> with deck.json and every image (${rec.bytes ? mb(rec.bytes) : "size unknown"}). The other person taps Import, or on Android shares it to Hooman.</p>
@@ -1477,6 +1534,7 @@ function photosSheet() {
 
 // ---------------------------------------------------------------- review screen
 async function thumbURL(key, card) {
+  if (!card.w) return null;
   const blob = await store.getFile(key, card.frames[0].path);
   if (!blob) return null;
   const params = displayFor(key, card, (await store.getDeck(key)).deck)(0, 0), head = new Uint8Array(await blob.slice(0, 26).arrayBuffer());
@@ -1568,6 +1626,11 @@ async function start() {
     toast("Answers from your other device were added");
   });
   live.start().catch((e) => console.error(e));
+  onLoading((key, ev) => {
+    if (!ev.done) return;
+    store.getDeck(key).then((rec) => rec && toast(`“${rec.title}”: all ${ev.total} cards are on the phone${ev.broken ? ` (${ev.broken} can't be shown; you'll see why on the card)` : ""}`, 4500));
+    if (!S && parseHash().page === "home") home();
+  });
   const qs = new URLSearchParams(location.search);
   await route();
   if (qs.has("shared")) {                     // a zip shared to the installed app (see sw.js)
