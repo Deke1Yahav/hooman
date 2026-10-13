@@ -108,7 +108,7 @@ async function take(file, was, openKey) {
   if (!existing) { const rec = await saveDeck(imported, "new"); return { deck: rec.key, added: rec.title }; }
   const lo = loadingOf(id);
   if (lo && !lo.active && imported.lazy && was && was.deck === id && was.mod === file.lastModified) {
-    loadInBackground(existing, imported.lazy.source);           // same zip, deck half loaded: finish it
+    loadInBackground(existing, imported.lazy);                  // same zip, deck not fully saved: finish it
     return { deck: id };
   }
   // First sight of a deck that is already here: update only if the zip is newer than the deck on the phone.
