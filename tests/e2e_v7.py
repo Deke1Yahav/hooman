@@ -189,7 +189,7 @@ def main():
         page.keyboard.press("Escape"); page.wait_for_timeout(300)
         import_example(page, "Is it a circle?"); swipe(page); settle(page)
         page.evaluate("""() => new Promise((res) => { const r = indexedDB.open("hooman-handles", 1);
-          r.onsuccess = () => { const tx = r.result.transaction("h", "readwrite"); tx.objectStore("h").put(true, "reading"); tx.oncomplete = res; }; })""")
+          r.onsuccess = () => { const tx = r.result.transaction("h", "readwrite"); tx.objectStore("h").put(true, "reading:live-folder"); tx.oncomplete = res; }; })""")
         page = ctx.new_page(); watch(page, errors)
         page.goto(base); page.wait_for_selector(".hero", timeout=15000)
         row = open_settings_row(page, "folder")

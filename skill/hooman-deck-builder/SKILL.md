@@ -84,6 +84,8 @@ The hooman exports `<deck id>.answers.zip`. It contains:
 - `masks/<card>.png` (one per frame in time decks)
 - `by` (who answered), `from` / `from_values` / `edits` on drawn objects, `points` (taps, with the segmentation objects they hit), `end` (follow mode), `note`, `number` and `text`
 
+If the user has a decks folder (Settings → Decks folder), saving the zip into it is the whole delivery: it appears in the app by itself, and a newer zip with the same `id` updates the deck (answers kept).
+
 With live save on (Settings → Live save), the same zip is kept up to date in the user's Google Drive or a folder, as `<deck id>.<annotator>.answers.zip`, one per person. For a team, ask for every file in that folder: they compare directly.
 
 ```bash

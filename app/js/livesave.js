@@ -16,6 +16,7 @@ import { prefs } from "./prefs.js";
 import { buildExport } from "./export.js";
 import { restoreAnswers } from "./backup.js";
 import { annotator, fileSafe } from "./settings.js";
+import { loadHandle, saveHandle } from "./handles.js";
 
 const QUIET = 4000, MAX_WAIT = 30000, RETRY = 60000, TARGETS = ["drive", "folder"];
 export const canDrive = () => drive.googleReady();
@@ -40,50 +41,11 @@ export const lastSaved = (key) => prefs.get("live.savedAt", {})[key] || "";
 export function onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 function set(t, patch) { Object.assign(st[t], patch); listeners.forEach((fn) => { try { fn(st); } catch (e) { console.error(e); } }); }
 
-// The folder handle lives in its own small database (a handle can't go in localStorage).
-function handles() {
-  return new Promise((res, rej) => {
-    const r = indexedDB.open("hooman-handles", 1);
-    r.onupgradeneeded = () => r.result.createObjectStore("h");
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-  });
-}
-const idbGet = (d, k) => new Promise((res) => { const q = d.transaction("h").objectStore("h").get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(undefined); });
-const idbPut = (d, k, v) => new Promise((res, rej) => {
-  const tx = d.transaction("h", "readwrite");
-  if (v === undefined) tx.objectStore("h").delete(k); else tx.objectStore("h").put(v, k);
-  tx.oncomplete = res; tx.onerror = () => rej(tx.error);
-});
-
-// Some Chromium builds (Edge 153, for one) kill the page when a stored folder handle is read back. A mark is stored
-// (and confirmed) before the read and removed after it; if the next start finds it, the read never finished: that
-// browser version is remembered as one that can't keep the folder, and the folder is asked for once per session
-// instead (until the browser updates). A bad build costs one crash, never one on every start.
-async function loadDir() {
-  try {
-    const d = await handles();
-    if ((await idbGet(d, "broken")) === navigator.userAgent) { folderLost = "This browser version can't remember the folder between visits: tap Reconnect to choose it (a browser update fixes this)."; return null; }
-    if (await idbGet(d, "reading")) {
-      await idbPut(d, "broken", navigator.userAgent); await idbPut(d, "reading");
-      folderLost = "This browser version can't remember the folder between visits: tap Reconnect to choose it (a browser update fixes this)."; return null;
-    }
-    await idbPut(d, "reading", true);
-    const h = await idbGet(d, "live-folder");
-    await idbPut(d, "reading");
-    return h || null;
-  } catch { return null; }
-}
-async function saveDir(h) {
-  const d = await handles();
-  if (h && (await idbGet(d, "broken")) === navigator.userAgent) return;         // kept for this session only
-  await idbPut(d, "live-folder", h || undefined);
-}
-
 async function ready(t) {
   if (!isOn(t)) return "off";
   if (!navigator.onLine && t === "drive") return "offline";
   if (t === "drive") return drive.signedIn(120000) ? "ready" : "paused";
-  if (!dir && !folderLost) dir = await loadDir();
+  if (!dir && !folderLost) { const r = await loadHandle("live-folder"); dir = r.handle || null; folderLost = r.lost || false; }
   if (!dir) { st.folder.msg = folderLost || "Tap Reconnect to choose the folder again."; return "paused"; }
   try { return (await dir.queryPermission({ mode: "readwrite" })) === "granted" ? "ready" : "paused"; } catch { return "paused"; }
 }
@@ -226,11 +188,18 @@ async function markAll(t) {
 
 export async function enable(t) {
   if (t === "drive") await drive.getToken();                    // Google's sign-in, inside the tap
-  else {
-    const h = await window.showDirectoryPicker({ id: "hooman-live", mode: "readwrite", startIn: "documents" });
-    dir = h; folderLost = false; await saveDir(h);
-    prefs.set("live.folderName", h.name); prefs.set("live.files.folder", {});
-  }
+  else return useFolder(await window.showDirectoryPicker({ id: "hooman-live", mode: "readwrite", startIn: "documents" }));
+  prefs.set(`live.${t}`, true);
+  await markAll(t);
+  set(t, { status: "saving", msg: "" });
+  return flushAll();
+}
+
+// Save into this folder from now on (a picked one, or the decks folder's "results").
+export async function useFolder(h) {
+  dir = h; folderLost = false; await saveHandle("live-folder", h);
+  prefs.set("live.folderName", h.name); prefs.set("live.files.folder", {});
+  const t = "folder";
   prefs.set(`live.${t}`, true);
   await markAll(t);
   set(t, { status: "saving", msg: "" });
@@ -239,7 +208,7 @@ export async function enable(t) {
 
 export async function disable(t) {
   prefs.set(`live.${t}`, false); setDirty(t, new Set());
-  if (t === "folder") { dir = null; await saveDir(null); prefs.set("live.folderName", ""); }
+  if (t === "folder") { dir = null; await saveHandle("live-folder", null); prefs.set("live.folderName", ""); }
   set(t, { status: "off", msg: "" });
 }
 
