@@ -416,7 +416,10 @@ async function decksAction(what) {
   try {
     if (what === "on") { await dfolder.choose(); decksNothingNew(); }
     else if (what === "off") { await dfolder.turnOff(); toast("The decks folder is off"); }
-    else if (what === "reconnect") { if ((await dfolder.reconnect()) === "denied") toast("The phone didn't give access to the folder. Settings → Decks folder → Turn off, then Choose a folder.", 6000); }
+    else if (what === "reconnect") {
+      if ((await dfolder.reconnect()) === "denied") toast("The phone didn't give access to the folder. Settings → Decks folder → Turn off, then Choose a folder.", 6000);
+      else live.regain();                         // live save in the folder's "results" comes back with it
+    }
     else if (what === "stop") dfolder.stop();
     else if (what === "check") { await dfolder.check({ force: true, openKey: S && S.key }); decksNothingNew(); }
     else if (what === "errors") {
@@ -487,6 +490,7 @@ function liveMark() {
 }
 function liveTap() {
   const p = live.paused();
+  if (p.includes("folder") && dfolder.isOn() && live.folderName() === "results") return decksAction("reconnect");   // one tap, both folders
   if (p.length) return liveAction("reconnect", p[0]);
   const s = live.status();
   toast(["drive", "folder"].filter((t) => s[t].status !== "off")
@@ -1851,6 +1855,15 @@ async function start() {
     if (!S && parseHash().page === "home") home();       // new decks, or the reconnect banner comes and goes
   });
   dfolder.start(() => (S ? S.key : null));
+  // Chrome drops folder access when the app has been in the background a while, and only a tap may ask for it
+  // again: the first tap after coming back (or after starting) does, for the decks folder, then live save.
+  let regain = true;
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") regain = true; });
+  document.addEventListener("click", () => {
+    if (!regain || (!dfolder.isOn() && !live.anyOn())) return;
+    regain = false;
+    dfolder.regain().then(() => live.regain()).catch((e) => console.warn("folders", e));
+  }, true);
   onLoading((key, ev) => {
     if (ev.failed) return toast(`Could not save the deck on the phone: ${ev.failed}. The phone may be out of storage.`, 5000);
     if (!ev.done) return;

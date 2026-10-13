@@ -81,6 +81,20 @@ export async function reconnect() {
   }
   return check({ force: true, fresh: true });
 }
+// Chrome drops folder access when the app has been in the background a while (one-time permissions). Called
+// inside the hooman's next tap: asks for it again (a phone that kept the permission answers at once, no prompt).
+export async function regain() {
+  if (!isOn()) return false;
+  if (!dir && !lost) { const r = await loadHandle(NAME); dir = r.handle || null; lost = r.lost || false; }
+  if (!dir) return false;
+  try {
+    if ((await dir.queryPermission({ mode: "readwrite" })) === "granted") return true;
+    if ((await dir.requestPermission({ mode: "readwrite" })) !== "granted") return false;
+  } catch { return false; }
+  check({ force: true, fresh: true, quiet: true });
+  return true;
+}
+
 // Drop the running check or load (its results are ignored if it ever finishes).
 export function stop(silent = false) {
   runId++; running = null;
