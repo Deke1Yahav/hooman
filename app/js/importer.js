@@ -114,14 +114,14 @@ async function load(source, rawText, onProgress) {
   const inCards = new Set(deck.cards.flatMap(cardPaths));
   const read = lazy ? [...new Set([...now.flatMap(cardPaths), ...list.filter((p) => !inCards.has(p))])] : list;
   const blobs = new Map(), sizes = new Map(), errs = [];
-  let n = 0;
+  let n = 0, io = false;
   onProgress && onProgress(0, read.length);
   await pool(read, source.kind === "web" ? 6 : 4, async (path) => {
     try { const r = await readImage(source, path); blobs.set(path, r.blob); sizes.set(path, r.sz); }
-    catch (e) { errs.push(e.message); }
+    catch (e) { errs.push(e.message); if (e.name === "NotReadableError") io = true; }    // the zip lost its access, not the deck's fault
     onProgress && onProgress(++n, read.length);
   });
-  if (errs.length) throw new ImportError(errs, warnings);
+  if (errs.length) throw Object.assign(new ImportError(errs, warnings), { io });
   let big = 0;
   now.forEach((card, i) => { if (checkCard(card, i, sizes, errs, warnings)) big++; });
   if (big) warnings.push(`${big} card${big > 1 ? "s have images" : " has an image"} larger than 4096 px; phones may be slow (keep the long side at 2048 px or less)`);
@@ -196,7 +196,11 @@ export async function importBlob(file, onProgress) {
   const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
   if (head[0] === 0x50 && head[1] === 0x4b) {
     let files;
-    try { files = await readZip(file); } catch (e) { throw new ImportError([e instanceof ZipError ? `${name}: ${e.message}` : `${name}: could not read the zip (${e.message})`]); }
+    try { files = await readZip(file); }
+    catch (e) {                                  // io: the file couldn't be read (Drive, the phone), the zip may be fine
+      if (e instanceof ZipError) throw new ImportError([`${name}: ${e.message}`]);
+      throw Object.assign(new ImportError([`${name}: could not read the zip (${e.message})`]), { io: true });
+    }
     const src = zipSource(files, name);
     const r = await load(src, await src.deckText(), onProgress);
     if (r.lazy) { r.lazy.file = file; r.bytes = file.size; }      // a big deck is saved as this one zip

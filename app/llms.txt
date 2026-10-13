@@ -394,6 +394,8 @@ with zipfile.ZipFile("compare.hooman.zip", "w") as z:
 
 If the app rejects a deck, it shows an exact error, such as `cards[16] (id "017"): image "img/017.jpg" is not in the zip (did you mean "img/017.JPG"?)`. The hooman can paste that error back to you.
 
+Some pasted messages aren't about the deck: `Listing "…" didn't answer within … s`, `could not read the zip (…)`, `The requested file could not be read…`. They mean the phone couldn't reach the decks folder or Google Drive in time. The zip is fine, so don't rebuild it. Tell the hooman to tap the decks folder line on the home screen (or **Check now** in Settings) to try again once the phone is online. Apps older than 0.11.4 sent these with "rejected the deck".
+
 ## 9. Getting the deck onto the phone
 
 - **A file:** give the hooman the `.hooman.zip`. They open the app and tap **Import**, or share the zip to the installed app from the phone's share sheet. A big zip can go in their Google Drive, OneDrive or Dropbox: **Import** opens the phone's file picker, which shows those drives.

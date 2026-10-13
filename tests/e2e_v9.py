@@ -29,7 +29,27 @@ PICK = """if (window.FileSystemHandle) {
   FileSystemHandle.prototype.queryPermission = async function () { return localStorage.getItem("test:perm") || "granted"; };
   FileSystemHandle.prototype.requestPermission = async function () {
     if (localStorage.getItem("test:deny")) return "denied";
-    localStorage.setItem("test:perm", "granted"); return "granted"; }; }"""
+    localStorage.setItem("test:perm", "granted"); return "granted"; };
+  // A slow Google Drive: test:hang listings never answer (or answer after test:hangms); test:unreadable: that zip's
+  // bytes can't be read (Drive lost the file)
+  const entries = FileSystemDirectoryHandle.prototype.entries;
+  FileSystemDirectoryHandle.prototype.entries = function () {
+    const it = entries.call(this), hang = +(localStorage.getItem("test:hang") || 0), ms = +(localStorage.getItem("test:hangms") || 0);
+    window.__lists = (window.__lists || 0) + 1;
+    if (!hang) return it;
+    localStorage.setItem("test:hang", String(hang - 1));
+    let first = true;
+    return { next() { if (!first) return it.next(); first = false; return ms ? new Promise((r) => setTimeout(r, ms)).then(() => it.next()) : new Promise(() => {}); },
+             [Symbol.asyncIterator]() { return this; } };
+  };
+  const getFile = FileSystemFileHandle.prototype.getFile;
+  FileSystemFileHandle.prototype.getFile = async function () {
+    const f = await getFile.call(this);
+    if (localStorage.getItem("test:unreadable") !== this.name) return f;
+    const bad = () => Promise.reject(new DOMException("The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.", "NotReadableError"));
+    return new Proxy(f, { get(t, k) { if (k === "slice") return () => ({ arrayBuffer: bad, text: bad }); if (k === "arrayBuffer" || k === "text") return bad;
+                                      const v = Reflect.get(t, k); return typeof v === "function" ? v.bind(t) : v; } });
+  }; }"""
 PUT = """async ([path, b64]) => { let d = await navigator.storage.getDirectory(); const parts = path.split("/");
   for (const p of parts.slice(0, -1)) d = await d.getDirectoryHandle(p, { create: true });
   const bin = atob(b64), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
@@ -269,6 +289,61 @@ def main():
         page.locator(".folder-line.warn").click(); page.wait_for_timeout(800)
         check("didn't give access" in page.locator("#toast").inner_text(), "a refused permission is said, with what to do")
         page.evaluate("localStorage.removeItem('test:deny')")
+
+        print("A slow Google Drive: asked again once, then 'didn't answer, tap to try again', never a zip to fix")
+        page.evaluate("localStorage.setItem('hooman:decks.listMs', '1000'); localStorage.setItem('test:decksdir', 'slow'); localStorage.setItem('test:perm', 'granted')")
+        page.evaluate(PUT, ["slow/slow-one.hooman.zip", b64(small_deck("Slow one", 2, "slow-one"))])
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
+        page.locator(".sheet [data-decks=off]").click(); page.wait_for_timeout(300)
+        page.locator(".sheet [data-decks=on]").click(); page.wait_for_timeout(1500)
+        page.keyboard.press("Escape"); page.goto(base + "#/"); page.wait_for_selector(".hero")
+        try: page.locator(".deckrow", has_text="Slow one").wait_for(timeout=10000)
+        except Exception: pass
+        check(page.locator(".deckrow", has_text="Slow one").count() == 1, "the folder's deck is here")
+        page.evaluate("window.__lists = 0; localStorage.setItem('test:hang', '1')")
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(2500)
+        check(page.evaluate("window.__lists") == 2 and page.locator(".folder-line.warn").count() == 0 and "1 deck" in page.locator(".folder-line").inner_text(),
+              f"a listing that stalls is asked for again, and the second answer is used ({page.evaluate('window.__lists')} listings)")
+        page.evaluate("localStorage.setItem('test:hang', '2')")
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(3500)
+        line = page.locator(".folder-line").inner_text()
+        check(page.locator(".folder-line.warn").count() == 1 and "didn't answer" in line and "try again" in line, f"then the folder line says Drive didn't answer ({line!r})")
+        check(page.locator(".folder-errs").count() == 0 and page.locator(".deckrow", has_text="Slow one").count() == 1,
+              "no zip is blamed ('couldn't be opened' isn't offered), the decks on the phone stay")
+        check("Google Drive may be slow" in page.locator("#toast").inner_text(), "Check now says why")
+        page.screenshot(path=OUT / "93_decks_drive_slow.png")
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
+        check("couldn't read it" in page.locator(".sheet #decks-row").inner_text(), "Settings says the folder couldn't be read, and why")
+        page.keyboard.press("Escape"); page.wait_for_timeout(300)
+        page.locator(".folder-line.warn").click(); page.wait_for_timeout(1500)
+        check(page.locator(".folder-line.warn").count() == 0 and "1 deck" in page.locator(".folder-line").inner_text(), "a tap tries again, and it's back")
+
+        print("Time in the background isn't counted against Drive")
+        page.evaluate("""() => { window.__vis = 'visible';
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => window.__vis });
+          Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__vis === 'hidden' }); }""")
+        page.evaluate("window.__lists = 0; localStorage.setItem('test:hang', '1'); localStorage.setItem('test:hangms', '2500')")
+        page.evaluate("""import('./js/decksfolder.js').then((m) => { window.__vis = 'hidden'; document.dispatchEvent(new Event('visibilitychange'));
+          m.check({ force: true, fresh: true }); })""")
+        page.wait_for_timeout(3000)
+        page.evaluate("window.__vis = 'visible'; document.dispatchEvent(new Event('visibilitychange'))")
+        page.wait_for_timeout(1200)
+        check(page.evaluate("window.__lists") == 1 and page.locator(".folder-line.warn").count() == 0,
+              f"a listing that answered while the app was in the background isn't a timeout ({page.evaluate('window.__lists')} listings)")
+        page.evaluate("delete document.visibilityState; delete document.hidden; localStorage.removeItem('test:hangms')")
+
+        print("A zip Drive can't hand over isn't 'a deck to fix', and is read again next time")
+        page.evaluate(PUT, ["slow/unread-me.hooman.zip", b64(small_deck("Unread me", 2, "unread-me"))])
+        page.evaluate("localStorage.setItem('test:unreadable', 'unread-me.hooman.zip')")
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(2000)
+        check(page.locator(".folder-line.warn").count() == 1 and page.locator(".folder-errs").count() == 0, "the line asks to try again; no zip is called broken")
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
+        check("unread-me" in page.locator(".sheet #decks-row").inner_text(), "Settings names the zip that couldn't be read")
+        page.keyboard.press("Escape"); page.wait_for_timeout(300)
+        page.evaluate("localStorage.removeItem('test:unreadable')")
+        page.locator(".folder-line.warn").click(); page.wait_for_timeout(2000)
+        check(page.locator(".deckrow", has_text="Unread me").count() == 1 and page.locator(".folder-line.warn").count() == 0, "next time it's read, and the deck is here")
+        page.evaluate("localStorage.removeItem('hooman:decks.listMs'); localStorage.removeItem('test:decksdir')")
         ctx.close()
 
         print("Browsers that can't pick folders")
