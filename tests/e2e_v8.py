@@ -51,7 +51,7 @@ IDB = """async ([store, key]) => { const d = await new Promise((res) => { const 
 
 
 UNSAVE = """async (key) => { const d = await new Promise((res) => { const r = indexedDB.open("hooman"); r.onsuccess = () => res(r.result); });
-  await new Promise((res) => { const tx = d.transaction("files", "readwrite"); tx.objectStore("files").delete([key, "\u0000deck.zip"]); tx.oncomplete = res; });
+  await new Promise((res) => { const tx = d.transaction(["files", "archives"], "readwrite"); tx.objectStore("files").delete([key, "\u0000deck.zip"]); tx.objectStore("archives").delete(key); tx.oncomplete = res; });
   localStorage.setItem("hooman:loading:" + key, JSON.stringify({ total: 400 })); }"""
 
 
@@ -105,7 +105,9 @@ def main():
         page.wait_for_timeout(400)
         check(page.locator("#loadmark").is_hidden(), "the header note is gone")
         n_files = page.evaluate(IDB, ["files", "big-1"])
-        check(n_files <= 14, f"one record for the zip, plus the first cards' files ({n_files} records, not {2 * N})")
+        in_own_store = page.evaluate("""async () => { const d = await new Promise((res) => { const r = indexedDB.open("hooman"); r.onsuccess = () => res(r.result); });
+          return await new Promise((res) => { const q = d.transaction("archives").objectStore("archives").get("big-1"); q.onsuccess = () => res(!!(q.result && q.result.blob)); }); }""")
+        check(n_files <= 14 and in_own_store, f"the zip is one record in its own store (so saving it never holds up other decks' images), plus the first cards' files ({n_files})")
 
         print("After a restart every card opens from the saved zip")
         page.reload(); page.wait_for_selector(".card canvas", timeout=20000)

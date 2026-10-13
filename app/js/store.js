@@ -4,10 +4,11 @@
 //   answers: {deck, card, answer, label, at, ms, changes, mask?: Blob}   key [deck, card]  (current answer)
 //   log:     {deck, card, answer|null, at, undo?}       append-only history, never edited
 //   notes:   {deck, card, text, at, by}                 key [deck, card]  (v2)
+//   archives: {deck, blob}                              a big deck's whole zip (v3; before, a files record at ARCHIVE)
 
 import { readZip } from "./zip.js";
 
-const DB_NAME = "hooman", DB_VERSION = 2;
+const DB_NAME = "hooman", DB_VERSION = 3;
 let dbp;
 
 function req(r) {
@@ -29,6 +30,9 @@ export function db() {
         d.createObjectStore("log", { autoIncrement: true }).createIndex("deck", "deck");
       }
       if (e.oldVersion < 2) d.createObjectStore("notes", { keyPath: ["deck", "card"] }).createIndex("deck", "deck");
+      // Big decks' zips get a store of their own: saving one (a long write while a zip from Google Drive downloads)
+      // then never holds up reading the images of the deck on screen, which live in "files".
+      if (e.oldVersion < 3) d.createObjectStore("archives", { keyPath: "deck" });
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -79,16 +83,24 @@ const sessions = new Map(), archives = new Map();
 export function useSession(deckKey, get) { sessions.set(deckKey, get); }
 export async function putArchive(deckKey, blob) {
   const d = await db();
-  const tx = d.transaction("files", "readwrite");
-  tx.objectStore("files").put({ deck: deckKey, path: ARCHIVE, blob });
+  const tx = d.transaction("archives", "readwrite");
+  tx.objectStore("archives").put({ deck: deckKey, blob });
   await done(tx);
   archives.delete(deckKey);
+}
+async function dropArchive(deckKey) {
+  const d = await db();
+  const tx = d.transaction(["archives", "files"], "readwrite");
+  tx.objectStore("archives").delete(deckKey);
+  tx.objectStore("files").delete([deckKey, ARCHIVE]);          // where 0.8-0.10 kept it
+  await done(tx);
 }
 function archiveOf(deckKey) {
   if (!archives.has(deckKey)) {
     archives.set(deckKey, (async () => {
       const d = await db();
-      const r = await req(d.transaction("files").objectStore("files").get([deckKey, ARCHIVE]));
+      const r = (await req(d.transaction("archives").objectStore("archives").get(deckKey)))
+        || (await req(d.transaction("files").objectStore("files").get([deckKey, ARCHIVE])));   // saved by 0.8-0.10
       if (!r) return null;
       const files = await readZip(r.blob);
       const top = [...files.keys()].filter((n) => n === "deck.json" || n.endsWith("/deck.json")).sort((a, b) => a.length - b.length)[0] || "deck.json";
@@ -188,6 +200,7 @@ export async function filesOf(deckKey) {
 // Removes a deck with its images, answers, notes and history.
 export async function deleteDeck(deckKey) {
   archives.delete(deckKey); sessions.delete(deckKey);
+  await dropArchive(deckKey);
   for (const s of ["files", "answers", "log", "notes"]) await deleteByIndex(s, deckKey);
   const d = await db();
   const tx = d.transaction("decks", "readwrite");
@@ -198,6 +211,7 @@ export async function deleteDeck(deckKey) {
 // Replacing a deck's images (an update import) keeps answers and history.
 export async function clearFiles(deckKey) {
   archives.delete(deckKey); sessions.delete(deckKey);
+  await dropArchive(deckKey);
   return deleteByIndex("files", deckKey);
 }
 

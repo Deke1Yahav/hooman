@@ -27,7 +27,9 @@ PICK = """if (window.FileSystemHandle) {
     if (localStorage.getItem("test:abort")) throw new DOMException("The user aborted a request.", "AbortError");
     return (await navigator.storage.getDirectory()).getDirectoryHandle(o && o.id === "hooman-decks" ? (localStorage.getItem("test:decksdir") || "decks") : "picked", { create: true }); };
   FileSystemHandle.prototype.queryPermission = async function () { return localStorage.getItem("test:perm") || "granted"; };
-  FileSystemHandle.prototype.requestPermission = async function () { localStorage.setItem("test:perm", "granted"); return "granted"; }; }"""
+  FileSystemHandle.prototype.requestPermission = async function () {
+    if (localStorage.getItem("test:deny")) return "denied";
+    localStorage.setItem("test:perm", "granted"); return "granted"; }; }"""
 PUT = """async ([path, b64]) => { let d = await navigator.storage.getDirectory(); const parts = path.split("/");
   for (const p of parts.slice(0, -1)) d = await d.getDirectoryHandle(p, { create: true });
   const bin = atob(b64), b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
@@ -99,6 +101,7 @@ def main():
         check("New from your folder" in page.locator("#toast").inner_text() and "Folder deck A" in page.locator("#toast").inner_text(), "the deck in the folder shows up, with a note")
         t = row.inner_text()
         check("“decks”" in t and "2 deck zips" in t and "couldn't be opened" in t, f"the row says what it found: 2 zips (the answers file skipped), 1 not a deck ({t!r})")
+        check("took" in t and "folders" in t and "file info" in t and "reading" in t, "and where the time went (folders · file info · reading)")
         page.screenshot(path=OUT / "90_decks_folder_settings.png")
         row.locator("[data-decks=errors]").click(); page.wait_for_selector(".sheet .errors")
         check("notadeck.zip" in page.locator(".sheet .errors").inner_text() and "deck.json" in page.locator(".sheet .errors").inner_text(), "the broken zip says why")
@@ -199,6 +202,33 @@ def main():
         toast = page.locator("#toast").inner_text()
         check("no deck zips" in toast and "results, not decks" in toast, f"a folder with only answers files says so ({toast!r})")
         page.evaluate("localStorage.removeItem('test:decksdir')")
+        page.keyboard.press("Escape"); page.wait_for_timeout(300)
+
+        print("On a phone, big zips wait for a tap")
+        page.evaluate("localStorage.setItem('test:decksdir', 'phone'); localStorage.setItem('hooman:decks.autoMax', '100')")
+        page.evaluate(PUT, ["phone/tap-one.hooman.zip", b64(small_deck("Tap one", 2, "tap-one"))])
+        page.evaluate(PUT, ["phone/sub/tap-two.hooman.zip", b64(small_deck("Tap two", 2, "tap-two"))])
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
+        page.locator(".sheet [data-decks=off]").click(); page.wait_for_timeout(300)
+        page.locator(".sheet [data-decks=on]").click(); page.wait_for_timeout(1500)
+        page.keyboard.press("Escape"); page.goto(base + "#/"); page.wait_for_selector(".hero")
+        clouds = page.locator(".deckrow.cloud")
+        check(clouds.count() == 2 and page.locator(".deckrow:not(.cloud)", has_text="Tap one").count() == 0,
+              f"the zips are listed at once, nothing downloaded ({clouds.count()} to tap: {[c.inner_text().splitlines()[0] for c in clouds.all()]})")
+        page.screenshot(path=OUT / "92_decks_tap_to_load.png")
+        clouds.filter(has_text="tap-one").click()
+        page.wait_for_selector(".card canvas", timeout=20000)
+        check("tap-one" in page.url, "a tap loads that deck and opens it")
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+        check(page.locator(".deckrow.cloud").count() == 1 and page.locator(".deckrow", has_text="Tap one").count() == 1, "the other one still waits; the loaded one is a deck now")
+        page.evaluate("localStorage.removeItem('hooman:decks.autoMax'); localStorage.removeItem('test:decksdir')")
+
+        print("Reconnect says when the phone refuses")
+        page.evaluate("localStorage.setItem('test:perm', 'prompt'); localStorage.setItem('test:deny', '1')")
+        page.reload(); page.wait_for_selector(".hero"); page.wait_for_timeout(800)
+        page.locator(".banner", has_text="decks folder").get_by_role("button", name="Reconnect").click(); page.wait_for_timeout(800)
+        check("didn't give access" in page.locator("#toast").inner_text(), "a refused permission is said, with what to do")
+        page.evaluate("localStorage.removeItem('test:deny')")
         ctx.close()
 
         print("Browsers that can't pick folders")
