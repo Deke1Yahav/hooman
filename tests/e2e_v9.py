@@ -23,7 +23,9 @@ from e2e_v3 import watch
 from e2e_v8 import big_deck, UNSAVE
 
 PICK = """if (window.FileSystemHandle) {
-  window.showDirectoryPicker = async (o) => (await navigator.storage.getDirectory()).getDirectoryHandle(o && o.id === "hooman-decks" ? "decks" : "picked", { create: true });
+  window.showDirectoryPicker = async (o) => {
+    if (localStorage.getItem("test:abort")) throw new DOMException("The user aborted a request.", "AbortError");
+    return (await navigator.storage.getDirectory()).getDirectoryHandle(o && o.id === "hooman-decks" ? (localStorage.getItem("test:decksdir") || "decks") : "picked", { create: true }); };
   FileSystemHandle.prototype.queryPermission = async function () { return localStorage.getItem("test:perm") || "granted"; };
   FileSystemHandle.prototype.requestPermission = async function () { localStorage.setItem("test:perm", "granted"); return "granted"; }; }"""
 PUT = """async ([path, b64]) => { let d = await navigator.storage.getDirectory(); const parts = path.split("/");
@@ -40,13 +42,13 @@ def png(a):
     b = io.BytesIO(); Image.fromarray(a.astype(np.uint8)).save(b, "PNG"); return b.getvalue()
 
 
-def small_deck(title, n=3):
+def small_deck(title, n=3, deck_id="folder-a"):
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as z:
         for i in range(n):
             a = np.full((48, 48), 40, np.uint8); a[10:30, 10:30] = 200
             z.writestr(f"img/{i}.png", png(a), compress_type=zipfile.ZIP_STORED)
-        z.writestr("deck.json", json.dumps({"hooman": 1, "id": "folder-a", "title": title, "question": "Bright square?",
+        z.writestr("deck.json", json.dumps({"hooman": 1, "id": deck_id, "title": title, "question": "Bright square?",
                                             "answers": {"right": "Yes", "left": "No"}, "cards": [f"img/{i}.png" for i in range(n)]}))
     return out.getvalue()
 
@@ -147,7 +149,7 @@ def main():
         row = page.locator(".deckrow", has_text="Folder deck A v2")
         check("Updated (answers kept)" in toast and row.count() == 1 and "2 / 4" in row.inner_text(), f"after leaving it, ↻ updates it and keeps the answers ({row.inner_text() if row.count() else toast!r})")
         page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(800)
-        check("Nothing new" in page.locator("#toast").inner_text(), "checking again: nothing new")
+        check("nothing new" in page.locator("#toast").inner_text().lower(), "checking again: nothing new")
 
         print("A big deck in the folder, interrupted, resumes by itself")
         page.evaluate(PUT, ["decks/folder-big.hooman.zip", b64(zbig)])
@@ -174,6 +176,29 @@ def main():
         page.screenshot(path=OUT / "91_decks_folder_paused.png")
         banner.get_by_role("button", name="Reconnect").click(); page.wait_for_timeout(1200)
         check(page.locator(".banner", has_text="decks folder").count() == 0 and page.evaluate("localStorage.getItem('test:perm')") == "granted", "Reconnect reads it again")
+
+        print("Subfolders, newest copy first")
+        page.evaluate(PUT, ["decks/projects/older/deep-b.hooman.zip", b64(small_deck("Deck B old", 2, "deep-b"))])
+        page.wait_for_timeout(1200)
+        page.evaluate(PUT, ["decks/projects/newer/deep-b.hooman.zip", b64(small_deck("Deck B new", 2, "deep-b"))])
+        page.evaluate(PUT, ["decks/results/stray.hooman.zip", b64(small_deck("In results", 2, "stray"))])
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(2000)
+        check(page.locator(".deckrow", has_text="Deck B new").count() == 1 and page.locator(".deckrow", has_text="Deck B old").count() == 0,
+              "a deck in a subfolder shows up, and of two copies the newest is used")
+        check(page.locator(".deckrow", has_text="In results").count() == 0, "the results folder isn't searched for decks")
+
+        print("Every outcome of choosing a folder is visible")
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
+        page.locator(".sheet [data-decks=off]").click(); page.wait_for_timeout(400)
+        page.evaluate("localStorage.setItem('test:abort', '1')")
+        page.locator(".sheet [data-decks=on]").click(); page.wait_for_timeout(600)
+        check("No folder was chosen" in page.locator("#toast").inner_text(), "a cancelled picker says no folder was chosen")
+        page.evaluate("localStorage.removeItem('test:abort'); localStorage.setItem('test:decksdir', 'answersonly')")
+        page.evaluate(PUT, ["answersonly/x.Dekel.answers.zip", b64(answers_zip())])
+        page.locator(".sheet [data-decks=on]").click(); page.wait_for_timeout(1500)
+        toast = page.locator("#toast").inner_text()
+        check("no deck zips" in toast and "results, not decks" in toast, f"a folder with only answers files says so ({toast!r})")
+        page.evaluate("localStorage.removeItem('test:decksdir')")
         ctx.close()
 
         print("Browsers that can't pick folders")

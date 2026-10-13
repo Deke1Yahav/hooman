@@ -103,7 +103,7 @@ python scripts/read_answers.py "DECKS_FOLDER" --mark-processed --by Claude   # a
 
 `--mark-processed` writes `results/processed.json` (the newest answer time used, per answers file). The app reads it, so the user's status table shows what you have processed and how many answers are new since.
 
-If the user has a decks folder (Settings → Decks folder), saving the zip into it is the whole delivery: it appears in the app by itself, and a newer zip with the same `id` updates the deck (answers kept).
+If the user has a decks folder (Settings → Decks folder), saving the zip into it (or a subfolder) is the whole delivery: it appears in the app by itself, and a newer zip with the same `id` updates the deck (answers kept).
 
 With live save on (Settings → Live save), the same zip is kept up to date in the user's Google Drive or a folder, as `<deck id>.<annotator>.answers.zip`, one per person. For a team, ask for every file in that folder: they compare directly.
 

@@ -397,7 +397,7 @@ If the app rejects a deck, it shows an exact error, such as `cards[16] (id "017"
 ## 9. Getting the deck onto the phone
 
 - **A file:** give the hooman the `.hooman.zip`. They open the app and tap **Import**, or share the zip to the installed app from the phone's share sheet. A big zip can go in their Google Drive, OneDrive or Dropbox: **Import** opens the phone's file picker, which shows those drives.
-- **A decks folder:** if the hooman set one (Settings → Decks folder, in Chrome or Edge), save the `.hooman.zip` into that folder, for example their synced Google Drive or OneDrive folder. It shows up in the app by itself, and a newer zip with the same `id` updates the deck and keeps the answers. With "save my answers into this folder too", the answers come back in its `results` subfolder.
+- **A decks folder:** if the hooman set one (Settings → Decks folder, in Chrome or Edge), save the `.hooman.zip` into that folder (or a subfolder of it), for example their synced Google Drive or OneDrive folder. It shows up in the app by itself, and a newer zip with the same `id` updates the deck and keeps the answers. With "save my answers into this folder too", the answers come back in its `results` subfolder.
 - **A link:** host `deck.json` (and its images, with relative paths) or the zip at a public URL that allows cross-origin requests, such as GitHub raw or a gist. Then give the hooman `https://deke1yahav.github.io/hooman/?deck=<url-encoded URL>`. The same link also works as a QR code.
 
 Everything stays on the hooman's phone. There's no account and no server.

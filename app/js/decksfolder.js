@@ -18,7 +18,7 @@ const NAME = "decks-folder", AGAIN = 20000;
 
 // status: off | checking | ok | paused; found: zips seen; added / updated: deck titles from the last check;
 // errors: [{name, errors}] for zips that aren't decks
-const st = { status: "off", at: "", msg: "", found: 0, added: [], updated: [], errors: [] };
+const st = { status: "off", at: "", msg: "", note: "", found: 0, skipped: 0, added: [], updated: [], errors: [] };
 const listeners = new Set();
 let dir = null, lost = false, running = null, lastRun = 0;
 
@@ -37,8 +37,11 @@ async function folder() {
 // From a tap: pick the folder, then check it.
 export async function choose() {
   const h = await window.showDirectoryPicker({ id: "hooman-decks", mode: "readwrite", startIn: "documents" });
-  dir = h; lost = false; await saveHandle(NAME, h);
+  dir = h; lost = false;
   prefs.set("decks.on", true); prefs.set("decks.name", h.name); prefs.set("decks.seen", {});
+  set({ status: "checking", msg: `Looking for decks in “${h.name}”…`, note: "" });
+  try { await saveHandle(NAME, h); }
+  catch (e) { console.warn("decks folder: could not keep the folder", e); set({ note: "This browser couldn't remember the folder, so it is used until the app closes." }); }
   return check({ force: true });
 }
 export async function turnOff() {
@@ -60,6 +63,23 @@ export async function resultsFolder() {
 
 const isDeckZip = (name) => /\.zip$/i.test(name) && !/\.answers\.zip$/i.test(name) && !/^hooman-backup/i.test(name) && !name.startsWith(".");
 
+// Every deck zip in the folder and its subfolders (4 levels; "results" and hidden folders skipped), named by their
+// path inside the folder ("project/deck.hooman.zip"), newest first: when the same deck has an older copy beside it,
+// the newest one is taken.
+async function deckZips(d) {
+  const out = [];
+  const walk = async (h, prefix, depth) => {
+    for await (const [name, e] of h.entries()) {
+      if (e.kind === "directory") { if (depth < 4 && name !== "results" && !name.startsWith(".")) await walk(e, `${prefix}${name}/`, depth + 1); }
+      else if (isDeckZip(name)) out.push({ name: prefix + name, file: await e.getFile() });
+      else if (/\.answers\.zip$|^hooman-status\.|^processed\.json$/i.test(name)) skipped++;
+    }
+  };
+  let skipped = 0;
+  await walk(d, "", 0);
+  return Object.assign(out.sort((a, b) => b.file.lastModified - a.file.lastModified), { skipped });
+}
+
 // openKey: the deck on screen (not updated under the hooman's hands; the next check takes it).
 export function check({ force = false, openKey = null } = {}) {
   if (!isOn()) return Promise.resolve();
@@ -69,16 +89,17 @@ export function check({ force = false, openKey = null } = {}) {
     try {
       const d = await folder();
       if (!d) return set({ status: "paused", msg: lost || (dir ? "" : "Tap Reconnect to choose the folder again.") });
-      set({ status: "checking", msg: "" });
+      set({ status: "checking", msg: `Looking for decks in “${d.name}”…` });
       const seen = prefs.get("decks.seen", {}), added = [], updated = [], errors = [];
+      const zips = await deckZips(d), skipped = zips.skipped;
       let found = 0;
-      for await (const [name, h] of d.entries()) {
-        if (h.kind !== "file" || !isDeckZip(name)) continue;
+      for (const { name, file } of zips) {
         found++;
-        const file = await h.getFile(), was = seen[name];
+        const was = seen[name];
         const changed = !was || was.mod !== file.lastModified || was.size !== file.size;
         const resume = was && was.deck && loadingOf(was.deck) && !loadingOf(was.deck).active;
         if (!changed && !resume) { if (was.errors) errors.push({ name, errors: was.errors }); continue; }
+        set({ msg: `Reading ${name.split("/").pop()} (${found} of ${zips.length}${file.size > 5e6 ? `, ${Math.round(file.size / 1e6)} MB: files on Drive download first` : ""})…` });
         const r = await take(file, was, openKey);
         if (r.later) continue;                                    // the deck on screen: next check
         seen[name] = { mod: file.lastModified, size: file.size, deck: r.deck, errors: r.errors };
@@ -88,7 +109,7 @@ export function check({ force = false, openKey = null } = {}) {
         prefs.set("decks.seen", seen);
       }
       lastRun = Date.now();
-      set({ status: "ok", at: new Date().toISOString(), found, added, updated, errors });
+      set({ status: "ok", msg: "", at: new Date().toISOString(), found, skipped, added, updated, errors });
     } catch (e) {
       if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) set({ status: "paused", msg: "" });
       else if (e && e.name === "NotFoundError") { dir = null; set({ status: "paused", msg: "The folder is gone: tap Reconnect to choose it again." }); }
