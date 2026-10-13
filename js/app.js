@@ -144,13 +144,51 @@ function deckRow(d, done) {
   const sub = lo ? (lo.active ? "Saving to the phone…" : `<b class="warn">Not fully on the phone · ${zip ? "tap to finish" : "pick its zip again"}</b>`)
     : n && done >= n ? `Done${d.openedAt ? ` · opened ${whenShort(d.openedAt)}` : ""}`
     : done ? `Opened ${whenShort(d.openedAt || d.updatedAt)}` : `New · ${n} card${n === 1 ? "" : "s"}`;
-  return `<button class="deckrow" ${zip ? `data-act="finishzip" data-zip="${esc(zip)}"` : `data-open="${esc(d.key)}"`}>
+  return `<div class="deckitem"><button class="deckrow" ${zip ? `data-act="finishzip" data-zip="${esc(zip)}"` : `data-open="${esc(d.key)}"`}>
       <b>${esc(d.title)}</b><span class="count">${n && done >= n ? "✓ " : ""}${done} / ${n}</span>
-      <div class="pbar"><i style="width:${pct}%"></i></div><span class="sub">${sub}</span></button>`;
+      <div class="pbar"><i style="width:${pct}%"></i></div><span class="sub">${sub}</span></button>
+      <button class="rowmenu" data-act="rowmenu" data-key="${esc(d.key)}" aria-label="More for ${esc(d.title)}">⋮</button></div>`;
 }
-const cloudRow = (a) => `<button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
+const cloudRow = (a) => `<div class="deckitem"><button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
       <b>${esc(zipTitle(a.name))}</b><span class="count">☁ ${sizeMB(a.size)}</span>
-      <span class="sub">${a.update ? "A newer version is in your folder · tap to load" : "In your folder · tap to load"}</span></button>`;
+      <span class="sub">${a.update ? "A newer version is in your folder · tap to load" : "In your folder · tap to load"}</span></button>
+      <button class="rowmenu" data-act="zipmenu" data-zip="${esc(a.name)}" aria-label="More for ${esc(zipTitle(a.name))}">⋮</button></div>`;
+
+// The ⋮ on a deck row: open, archive or bring back, delete from this phone.
+async function rowMenu(key) {
+  const rec = await store.getDeck(key);
+  if (!rec) return;
+  const archived = isArchived(rec, (await store.answersOf(key)).length);
+  const sh = openSheet(`<h3>${esc(rec.title)}</h3><p class="mono muted" style="font-size:12px;margin:-4px 0 0">${esc(key)}</p>
+    <div class="menu">
+      <button class="btn quiet" data-r="open">Open</button>
+      <button class="btn quiet" data-r="shelf">${archived ? "Back to To do" : "Move to archive"}</button>
+      <button class="btn danger" data-r="delete">Delete from this phone</button>
+    </div>`);
+  sh.el.onclick = async (e) => {
+    const r = e.target.closest("[data-r]");
+    if (!r) return;
+    if (r.dataset.r === "open") { sh.close(); return go(`#/deck/${encodeURIComponent(key)}`); }
+    if (r.dataset.r === "delete") return deleteSheet(rec);
+    rec.shelf = archived ? "active" : "archive"; await saveRec(rec);
+    sh.close(); toast(archived ? "Back in To do" : "Moved to the Archive"); home();
+  };
+}
+// The ⋮ on a "tap to load" row: load it, or hide it from the list.
+function zipMenu(name) {
+  const sh = openSheet(`<h3>${esc(zipTitle(name))}</h3><p class="mono muted" style="font-size:12px;margin:-4px 0 0">${esc(name)} · in your decks folder</p>
+    <div class="menu">
+      <button class="btn quiet" data-z="load">Load now</button>
+      <button class="btn quiet" data-z="hide">Hide from this list<small>it comes back if the zip changes</small></button>
+    </div>`);
+  sh.el.onclick = (e) => {
+    const z = e.target.closest("[data-z]");
+    if (!z) return;
+    sh.close();
+    if (z.dataset.z === "load") return loadZip(name);
+    dfolder.hide(name); toast("Hidden from the list"); home();
+  };
+}
 
 function folderLine() {
   if (!dfolder.isOn()) return "";
@@ -219,7 +257,7 @@ async function home() {
        photos: photosSheet, drive: openFromDrive, install: installFlow, installno: () => { prefs.set("installNo", true); home(); },
        repick: pickZipAgain, checkdecks: decksCheckNow, stopcheck: () => dfolder.stop(), folderrors: () => decksAction("errors"),
        loadzip: () => loadZip(b.dataset.zip), finishzip: () => loadZip(b.dataset.zip, true), connect: () => decksAction("on"),
-       add: addSheet, help: appHelp })[b.dataset.act]();
+       add: addSheet, help: appHelp, rowmenu: () => rowMenu(b.dataset.key), zipmenu: () => zipMenu(b.dataset.zip) })[b.dataset.act]();
   };
 }
 
@@ -1385,12 +1423,19 @@ function tourSheet() {
 }
 
 function deleteSheet(rec) {
+  const zip = dfolder.isOn() ? dfolder.zipOf(rec.key) : "", saved = live.lastSaved(rec.key);
   const sh = openSheet(`<h3>Delete “${esc(rec.title)}”?</h3>
-    <p>This removes the deck, its images and <b>all its answers</b> from this device. Export the answers first if you need them.</p>
+    <p>This removes the deck, its images and <b>all its answers</b> from this phone.
+      ${saved ? `Live save kept a copy of the answers (saved ${whenShort(saved)}).` : "Export the answers first if you need them."}</p>
+    ${zip ? `<p>The zip stays in “${esc(dfolder.folderName())}”: it shows up there as “tap to load”, if you want it back.</p>` : ""}
     <div class="row"><button class="btn danger" data-del>Delete</button><button class="btn quiet" data-close>Cancel</button></div>`);
   sh.el.onclick = async (e) => {
     if (e.target.closest("[data-close]")) sh.close();
-    if (e.target.closest("[data-del]")) { forgetLoading(rec.key); await store.deleteDeck(rec.key); live.statusSoon(); sh.close(); toast("Deleted"); go("#/"); }
+    if (e.target.closest("[data-del]")) {
+      forgetLoading(rec.key); await store.deleteDeck(rec.key);
+      if (zip) dfolder.removed(rec.key);
+      live.statusSoon(); sh.close(); toast("Deleted"); go("#/");
+    }
   };
 }
 
