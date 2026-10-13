@@ -448,7 +448,7 @@ async function finishImport(imported, mode, existing) {
   const w = imported.warnings;
   sh.el.innerHTML = `<h3>Ready: ${esc(rec.title)}</h3>
     <p>${rec.deck.cards.length} cards${rec.deck.question ? "" : " to annotate"}. ${mode === "update" ? "Your earlier answers are kept." : ""}</p>
-    ${rec.loadingLeft ? `<p><b style="color:var(--text)">Start now:</b> the first cards are ready, and the other ${rec.loadingLeft} load in the background while you work. Keep the app open until the deck list says it's done.</p>` : ""}
+    ${rec.loadingLeft ? `<p><b style="color:var(--text)">Start now:</b> the first card${rec.deck.cards.length - rec.loadingLeft > 1 ? "s are" : " is"} ready, and the other ${rec.loadingLeft} load in the background while you work. Keep the app open until the deck list says it's done.</p>` : ""}
     ${w.length ? `<details><summary>${w.length} warning${w.length > 1 ? "s" : ""} (the deck still works)</summary><ul class="errors warn">${w.slice(0, 40).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
       <button class="btn quiet" data-copy>Copy warnings for the AI</button></details>` : ""}
     <div class="stack"><button class="btn" data-go>Open the deck</button></div>`;
