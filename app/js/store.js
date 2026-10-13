@@ -1,9 +1,11 @@
 // IndexedDB storage. Everything lives on this device.
 //   decks:   {key, deck (normalized), title, importedAt, updatedAt, origin, custom?, order?, lastCard?}
-//   files:   {deck, path, blob}                         key [deck, path]
+//   files:   {deck, path, blob}                         key [deck, path]; big decks: their whole zip at path ARCHIVE
 //   answers: {deck, card, answer, label, at, ms, changes, mask?: Blob}   key [deck, card]  (current answer)
 //   log:     {deck, card, answer|null, at, undo?}       append-only history, never edited
 //   notes:   {deck, card, text, at, by}                 key [deck, card]  (v2)
+
+import { readZip } from "./zip.js";
 
 const DB_NAME = "hooman", DB_VERSION = 2;
 let dbp;
@@ -62,7 +64,41 @@ export async function putFiles(deckKey, files) {
 export async function getFile(deckKey, path) {
   const d = await db();
   const r = await req(d.transaction("files").objectStore("files").get([deckKey, path]));
-  return r ? r.blob : null;
+  return r ? r.blob : fromArchive(deckKey, path);
+}
+
+// Big decks keep their zip whole, as one record: saving it is a single straight copy (the fastest thing phone
+// storage does), and a card's images are read out of it when the card is shown. Until that copy is saved, they
+// come from the zip the hooman picked (useSession). Small decks store each image as its own record, as before.
+export const ARCHIVE = "\u0000deck.zip";
+const sessions = new Map(), archives = new Map();
+export function useSession(deckKey, get) { sessions.set(deckKey, get); }
+export async function putArchive(deckKey, blob) {
+  const d = await db();
+  const tx = d.transaction("files", "readwrite");
+  tx.objectStore("files").put({ deck: deckKey, path: ARCHIVE, blob });
+  await done(tx);
+  archives.delete(deckKey);
+}
+function archiveOf(deckKey) {
+  if (!archives.has(deckKey)) {
+    archives.set(deckKey, (async () => {
+      const d = await db();
+      const r = await req(d.transaction("files").objectStore("files").get([deckKey, ARCHIVE]));
+      if (!r) return null;
+      const files = await readZip(r.blob);
+      const top = [...files.keys()].filter((n) => n === "deck.json" || n.endsWith("/deck.json")).sort((a, b) => a.length - b.length)[0] || "deck.json";
+      return { files, root: top.slice(0, -"deck.json".length) };
+    })().catch(() => null));
+  }
+  return archives.get(deckKey).then((a) => { if (!a) archives.delete(deckKey); return a; });
+}
+async function fromArchive(deckKey, path) {
+  const s = sessions.get(deckKey);
+  if (s) { try { const b = await s(path); if (b) return b; } catch { /* not in the picked zip: try the saved one */ } }
+  const a = await archiveOf(deckKey);
+  const e = a && a.files.get(a.root + path);
+  return e ? e.blob() : null;
 }
 
 export async function answersOf(deckKey) {
@@ -130,13 +166,24 @@ export async function addLog(entries) {
     await done(tx);
   }
 }
+// Every image of a deck (for sharing and backups): its own records, plus a big deck's images out of its zip.
 export async function filesOf(deckKey) {
   const d = await db();
-  return req(d.transaction("files").objectStore("files").index("deck").getAll(deckKey));
+  const own = (await req(d.transaction("files").objectStore("files").index("deck").getAll(deckKey))).filter((f) => f.path !== ARCHIVE);
+  const a = await archiveOf(deckKey);
+  if (!a) return own;
+  const have = new Set(own.map((f) => f.path));
+  for (const [name, e] of a.files) {
+    const path = name.slice(a.root.length);
+    if (!name.startsWith(a.root) || have.has(path) || !/\.(png|jpe?g|webp|gif)$/i.test(path)) continue;
+    own.push({ deck: deckKey, path, blob: await e.blob() });
+  }
+  return own;
 }
 
 // Removes a deck with its images, answers, notes and history.
 export async function deleteDeck(deckKey) {
+  archives.delete(deckKey); sessions.delete(deckKey);
   for (const s of ["files", "answers", "log", "notes"]) await deleteByIndex(s, deckKey);
   const d = await db();
   const tx = d.transaction("decks", "readwrite");
@@ -146,6 +193,7 @@ export async function deleteDeck(deckKey) {
 
 // Replacing a deck's images (an update import) keeps answers and history.
 export async function clearFiles(deckKey) {
+  archives.delete(deckKey); sessions.delete(deckKey);
   return deleteByIndex("files", deckKey);
 }
 

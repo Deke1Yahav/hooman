@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 from e2e import OUT, serve, check, failures, dismiss_tour
 from e2e_v3 import watch
-from e2e_v8 import big_deck
+from e2e_v8 import big_deck, UNSAVE
 
 PICK = """if (window.FileSystemHandle) {
   window.showDirectoryPicker = async (o) => (await navigator.storage.getDirectory()).getDirectoryHandle(o && o.id === "hooman-decks" ? "decks" : "picked", { create: true });
@@ -84,8 +84,6 @@ def main():
         ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True, service_workers="block")
         ctx.add_init_script(PICK)
         page = ctx.new_page(); watch(page, errors)
-        cdp = ctx.new_cdp_session(page)
-        slow = lambda rate: cdp.send("Emulation.setCPUThrottlingRate", {"rate": rate})
         page.goto(base); page.wait_for_selector(".hero")
         page.evaluate(PUT, ["decks/folder-a.hooman.zip", b64(small_deck("Folder deck A"))])
         page.evaluate(PUT, ["decks/folder-a.Tester.answers.zip", b64(answers_zip())])
@@ -131,19 +129,21 @@ def main():
         check("Nothing new" in page.locator("#toast").inner_text(), "checking again: nothing new")
 
         print("A big deck in the folder, interrupted, resumes by itself")
-        slow(20)
         page.evaluate(PUT, ["decks/folder-big.hooman.zip", b64(zbig)])
         page.locator("[data-act=checkdecks]").click()
         page.locator(".deckrow", has_text="folder-big").wait_for(timeout=60000)
-        check("loading" in page.locator(".deckrow", has_text="folder-big").inner_text(), "it opens at once and loads in the background")
-        page.wait_for_timeout(1500)
+        check(page.locator(".deckrow", has_text="folder-big").count() == 1, "it opens at once (the zip is saved in the background)")
+        t0 = time.time()
+        while time.time() - t0 < 60 and page.evaluate("localStorage.getItem('hooman:loading:folder-big')") is not None:
+            page.wait_for_timeout(300)
+        page.evaluate(UNSAVE, "folder-big")      # as if the app had closed before the zip was saved
         page.reload(); page.wait_for_selector(".hero")
-        slow(1)
         t0 = time.time()
         while time.time() - t0 < 120 and page.evaluate("localStorage.getItem('hooman:loading:folder-big')") is not None:
             page.wait_for_timeout(500)
         done = page.evaluate("localStorage.getItem('hooman:loading:folder-big')") is None
-        check(done and page.locator(".banner", has_text="still to load").count() == 0, f"after a restart it resumes from the folder without asking ({time.time() - t0:.0f} s)")
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+        check(done and page.locator(".banner", has_text="fully saved").count() == 0, f"after a restart it finishes from the folder without asking ({time.time() - t0:.0f} s)")
 
         print("The permission lapses: one tap brings it back")
         page.evaluate("localStorage.setItem('test:perm', 'prompt')")

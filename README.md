@@ -40,7 +40,8 @@ app/                    the whole app: static files, no build step
   js/importer.js        zip / deck.json / link import, size checks; big zips (40+ images or 30+ MB) open after their first card
   js/decksfolder.js     the decks folder: deck zips put in a picked folder show up by themselves (and update their decks)
   js/handles.js         picked folders kept between visits (with a guard for browsers that crash reading them back)
-  js/loading.js         the background loading of big decks: the card on screen first, resumable by picking the zip again
+  js/loading.js         big decks: their zip is saved whole in the background (store.js reads images out of it as cards
+                        are shown); resumable by picking the zip again or from the decks folder
   js/view.js            card renderer (pixel-exact vector mask outlines)
   js/png.js             label-PNG decode/encode (8/16-bit, palette, RGB), image size sniffing
   js/zip.js             zip read (deflate, zip64) / write
@@ -63,7 +64,7 @@ tests/e2e_v4.py         0.4: decks from photos, sharing (file, link, QR), Drive 
 tests/e2e_v5.py         0.4: channels per time frame, narrow-card layout, Start from across frames / bold only
 tests/e2e_v6.py         0.4.2-0.4.4: the install button (Android dialog or steps, iPhone, installed app, computers), the Drive guide
 tests/e2e_v9.py         0.7: the decks folder (new, changed and broken zips, resume, results subfolder, reconnect), in Google Chrome
-tests/e2e_v8.py         0.6: big decks open at once and load in the background (jump ahead, broken card, restart + resume)
+tests/e2e_v8.py         0.6/0.8: big decks open at once, their zip saved whole (jump ahead, restart, broken card, resume)
 tests/e2e_v7.py         0.5: live save to a folder (in the installed Google Chrome) and to Google Drive (stand-in): merging,
                         pausing and reconnecting, team folders, the crash guard
 reference/              the earlier claude.ai pages this app grew from (read-only)

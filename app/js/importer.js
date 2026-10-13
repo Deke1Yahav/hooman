@@ -7,7 +7,7 @@ import { normalizeDeck } from "./deck.js";
 import * as store from "./store.js";
 import { driveFileId } from "./share.js";
 import { googleReady, downloadPublic } from "./drive.js";
-import { startLoading, pendingIds, forgetLoading } from "./loading.js";
+import { startLoading, forgetLoading } from "./loading.js";
 
 const isURL = (p) => /^https?:\/\//i.test(p);
 const q = (s) => JSON.stringify(s);
@@ -132,20 +132,6 @@ async function load(source, rawText, onProgress) {
   return { deck, blobs, warnings, origin: source.name, bytes, lazy: lazy ? { source, first: now.map((c) => c.id) } : null };
 }
 
-// The background reader for one card of a big deck: check it like the import does, then store its files.
-function cardReader(key, source, deck) {
-  const index = new Map(deck.cards.map((c, i) => [c.id, i])), byId = new Map(deck.cards.map((c) => [c.id, c]));
-  return async (id) => {
-    const card = byId.get(id), sizes = new Map(), files = [];
-    for (const p of cardPaths(card)) { const r = await readImage(source, p); sizes.set(p, r.sz); files.push({ path: p, blob: r.blob }); }
-    const errs = [];
-    checkCard(card, index.get(id), sizes, errs, []);
-    if (errs.length) return { broken: errs.join(" ") };
-    await store.putFiles(key, files);
-    return { w: card.w, h: card.h };
-  };
-}
-
 // For a card whose size isn't known: read it from its stored files (null if some file isn't stored).
 export async function storedCard(key, card) {
   const sizes = new Map();
@@ -162,14 +148,11 @@ export async function storedCard(key, card) {
   return errs.length ? { broken: errs.join(" ") } : { w: card.w, h: card.h };
 }
 
-// Start (or, after picking the zip again, finish) loading a big deck's remaining cards.
-export function loadInBackground(rec, source, skip = []) {
-  const order = rec.order || rec.deck.cards.map((c) => c.id), left = new Set(pendingIds(rec.key));
-  const skipped = new Set(skip);
-  const pending = left.size ? order.filter((id) => left.has(id)) : order.filter((id) => !skipped.has(id));
-  if (!pending.length) return 0;
-  startLoading(rec.key, { pending, total: rec.deck.cards.length, readCard: cardReader(rec.key, source, rec.deck) });
-  return pending.length;
+// Save a big deck's zip on the phone in the background (or, after picking the zip again, finish saving it).
+// Returns how many cards weren't checked yet (they are checked as they're shown).
+export function loadInBackground(rec, lazy) {
+  startLoading(rec.key, { total: rec.deck.cards.length, file: lazy.file, get: (p) => lazy.source.get(p) });
+  return rec.deck.cards.length - (lazy.first || []).length;
 }
 
 function zipSource(files, name) {
@@ -213,7 +196,9 @@ export async function importBlob(file, onProgress) {
     let files;
     try { files = await readZip(file); } catch (e) { throw new ImportError([e instanceof ZipError ? `${name}: ${e.message}` : `${name}: could not read the zip (${e.message})`]); }
     const src = zipSource(files, name);
-    return load(src, await src.deckText(), onProgress);
+    const r = await load(src, await src.deckText(), onProgress);
+    if (r.lazy) { r.lazy.file = file; r.bytes = file.size; }      // a big deck is saved as this one zip
+    return r;
   }
   const text = await file.text();
   if (/^\s*[{[]/.test(text)) {
@@ -274,7 +259,7 @@ export async function saveDeck(imported, mode, existing) {
   };
   await store.putDeck(rec);
   store.askPersistent();
-  if (imported.lazy) rec.loadingLeft = loadInBackground(rec, imported.lazy.source, imported.lazy.first);
+  if (imported.lazy) rec.loadingLeft = loadInBackground(rec, imported.lazy);
   return rec;
 }
 

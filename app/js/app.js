@@ -19,7 +19,7 @@ import { readAnswers } from "./backup.js";
 import { installState, promptInstall, markInstalled, watchInstall, isIOS, isAndroid } from "./install.js";
 import * as live from "./livesave.js";
 import * as dfolder from "./decksfolder.js";
-import { loadingOf, onLoading, ensureCard, want, forgetLoading } from "./loading.js";
+import { loadingOf, onLoading, ensureCard, forgetLoading } from "./loading.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -149,7 +149,7 @@ async function home() {
       <button class="icon-btn" data-act="settings" aria-label="Settings and backup" style="margin-left:auto">⚙</button></div>
     <div id="install-slot">${installBanner()}</div>
     ${dfolder.isOn() && dfolder.status().status === "paused" ? `<div class="banner"><span>The decks folder “${esc(dfolder.folderName())}” needs a tap to be read again.</span><button class="btn quiet" data-act="checkdecks">Reconnect</button></div>` : ""}
-    ${decks.filter((d) => loadingOf(d.key) && !loadingOf(d.key).active).map((d) => `<div class="banner"><span>“${esc(d.title)}” has ${loadingOf(d.key).left} cards still to load. Pick its zip again to finish.</span><button class="btn quiet" data-act="repick">Pick the zip</button></div>`).join("")}
+    ${decks.filter((d) => loadingOf(d.key) && !loadingOf(d.key).active).map((d) => `<div class="banner"><span>“${esc(d.title)}” wasn't fully saved when the app closed. Pick its zip again to finish.</span><button class="btn quiet" data-act="repick">Pick the zip</button></div>`).join("")}
     ${stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this device.</span><button class="btn quiet" data-act="backup">Back up</button></div>` : ""}
     <div class="actions">
       <button class="btn" data-act="import">＋ Import deck</button>
@@ -243,7 +243,7 @@ async function runRestore(fn) {
 async function backupNow(images) {
   if (images) {
     const still = (await store.listDecks()).find((d) => loadingOf(d.key));
-    if (still) return toast(`“${still.title}” is still loading. Back up with images when it's done (answers only works now).`, 4000);
+    if (still) return toast(`“${still.title}” is still being saved on the phone. Back up with images when it's done (answers only works now).`, 4000);
   }
   const sh = openSheet(`<h3>Making the backup…</h3><p>${images ? "Answers, notes, masks and every deck's images." : "Answers, notes, drawn masks and history."}</p>`, { dismissable: false });
   try {
@@ -257,9 +257,7 @@ async function backupNow(images) {
 // ---------------------------------------------------------------- big decks that are still loading (loading.js)
 function loadNote(key) {
   const lo = loadingOf(key);
-  if (!lo) return "";
-  const pct = Math.floor((100 * (lo.total - lo.left)) / Math.max(1, lo.total));
-  return lo.active ? `loading ${pct}%` : `${lo.left} cards to load`;
+  return !lo ? "" : lo.active ? "saving to the phone…" : "needs its zip again";
 }
 function pickZipAgain() {
   const inp = document.createElement("input");
@@ -273,7 +271,7 @@ function showUnloaded(card, why) {
   if (!stage) return;
   stage.innerHTML = `<div class="card-note">${why === "broken"
     ? `<b>This card can't be shown.</b><p>${esc(card.broken || "")}</p><div class="row"><button class="btn" data-act="skip">Skip it</button></div>`
-    : `<b>This card isn't on the phone yet.</b><p>The app closed while this deck was loading, so ${loadingOf(S.key) ? `${loadingOf(S.key).left} cards` : "some cards"} still need their images. Pick the deck's zip again to finish; your answers stay.</p>
+    : `<b>This card isn't on the phone yet.</b><p>The app closed before this deck was saved on the phone. Pick the deck's zip again to finish; your answers stay.</p>
        <div class="row"><button class="btn" data-act="repick">Pick the zip again</button><button class="btn quiet" data-act="skip">Skip</button></div>`}</div>`;
 }
 
@@ -416,8 +414,8 @@ async function runImport(getter) {
   const existing = await store.getDeck(imported.deck.id);
   if (!existing) return finishImport(imported, "new");
   if (imported.lazy && loadingOf(existing.key)) {             // the zip of a deck that was still loading: finish it
-    const n = loadInBackground(existing, imported.lazy.source);
-    sh.close(); toast(n ? `Loading the remaining ${n} cards. You can work meanwhile.` : "This deck is complete", 3500);
+    loadInBackground(existing, imported.lazy);
+    sh.close(); toast("Saving the rest of the deck on the phone. You can work meanwhile.", 3500);
     if (S && S.key === existing.key) showCard(); else if (!S && parseHash().page === "home") home();
     return;
   }
@@ -448,7 +446,7 @@ async function finishImport(imported, mode, existing) {
   const w = imported.warnings;
   sh.el.innerHTML = `<h3>Ready: ${esc(rec.title)}</h3>
     <p>${rec.deck.cards.length} cards${rec.deck.question ? "" : " to annotate"}. ${mode === "update" ? "Your earlier answers are kept." : ""}</p>
-    ${rec.loadingLeft ? `<p><b style="color:var(--text)">Start now:</b> the first card${rec.deck.cards.length - rec.loadingLeft > 1 ? "s are" : " is"} ready, and the other ${rec.loadingLeft} load in the background while you work. Keep the app open until the deck list says it's done.</p>` : ""}
+    ${rec.loadingLeft ? `<p><b style="color:var(--text)">Start now:</b> the first card${rec.deck.cards.length - rec.loadingLeft > 1 ? "s are" : " is"} ready. The whole zip is being saved on the phone in the background, and every card opens as you reach it. Keep the app open until the deck list says it's saved.</p>` : ""}
     ${w.length ? `<details><summary>${w.length} warning${w.length > 1 ? "s" : ""} (the deck still works)</summary><ul class="errors warn">${w.slice(0, 40).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
       <button class="btn quiet" data-copy>Copy warnings for the AI</button></details>` : ""}
     <div class="stack"><button class="btn" data-go>Open the deck</button></div>`;
@@ -763,7 +761,7 @@ function prefetch() {
     i = (i + 1) % S.order.length;
     const c = S.cardsById.get(S.order[i]);
     if (!c || S.answers.has(c.id)) continue;
-    if (!c.w) { want(S.key, c.id); continue; }
+    if (!c.w) { ensureCard(S.key, c, (x) => storedCard(S.key, x)); continue; }   // size the next card ahead
     framePaths(c, 0).forEach((p) => frameSource(S.key, p).catch(() => {}));   // the next card's channels
     const colors = Object.fromEntries(S.rec.deck.sources.map((s) => [s.name, s.color]));
     c.overlays.filter((o) => o.shape === "mask").forEach((o) => maskLayer(S.key, o.mask, o.value, colors[o.source], o.style === "fill").catch(() => {}));
@@ -1131,7 +1129,7 @@ function onDeckClick(e) {
   if (act === "menu") return deckMenu();
   if (act === "live") return liveTap();
   if (act === "repick") return pickZipAgain();
-  if (act === "loadinfo") { const lo = loadingOf(S.key); return toast(lo ? `${lo.total - lo.left} of ${lo.total} cards are on the phone${lo.active ? "; the rest load while you work" : ". Pick the zip again to load the rest"}.` : "All cards are loaded", 4000); }
+  if (act === "loadinfo") { const lo = loadingOf(S.key); return toast(!lo ? "The deck is saved on the phone" : lo.active ? "Saving the deck on the phone. You can work meanwhile." : "Pick the deck's zip again to finish saving it.", 4000); }
   if (act === "play") return togglePlay();
   if (act === "export") return exportSheet(S.rec);
   if (act === "review") return go(`#/review/${encodeURIComponent(S.key)}`);
@@ -1437,7 +1435,7 @@ function wireLink(el, link, title) {
 }
 
 async function shareDeckSheet(key) {
-  if (loadingOf(key)) return toast(`This deck is still loading (${loadingOf(key).left} cards to go). Share it when it's done.`, 3500);
+  if (loadingOf(key)) return toast("This deck is still being saved on the phone. Share it when it's done.", 3500);
   const rec = await store.getDeck(key);
   const sh = openSheet(`<h3>Share this deck</h3>
     <p>Send it as a file: a <span class="mono">.hooman.zip</span> with deck.json and every image (${rec.bytes ? mb(rec.bytes) : "size unknown"}). The other person taps Import, or on Android shares it to Hooman.</p>
@@ -1575,7 +1573,7 @@ function photosSheet() {
 
 // ---------------------------------------------------------------- review screen
 async function thumbURL(key, card) {
-  if (!card.w) return null;
+  if (!card.w && (await ensureCard(key, card, (c) => storedCard(key, c))) !== "ok") return null;
   const blob = await store.getFile(key, card.frames[0].path);
   if (!blob) return null;
   const params = displayFor(key, card, (await store.getDeck(key)).deck)(0, 0), head = new Uint8Array(await blob.slice(0, 26).arrayBuffer());
@@ -1679,8 +1677,9 @@ async function start() {
   });
   dfolder.start(() => (S ? S.key : null));
   onLoading((key, ev) => {
+    if (ev.failed) return toast(`Could not save the deck on the phone: ${ev.failed}. The phone may be out of storage.`, 5000);
     if (!ev.done) return;
-    store.getDeck(key).then((rec) => rec && toast(`“${rec.title}”: all ${ev.total} cards are on the phone${ev.broken ? ` (${ev.broken} can't be shown; you'll see why on the card)` : ""}`, 4500));
+    store.getDeck(key).then((rec) => rec && toast(`“${rec.title}” is saved on the phone`, 3500));
     if (!S && parseHash().page === "home") home();
   });
   const qs = new URLSearchParams(location.search);
