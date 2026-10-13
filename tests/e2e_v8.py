@@ -24,8 +24,9 @@ def png(a):
     b = io.BytesIO(); Image.fromarray(a.astype(np.uint8)).save(b, "PNG"); return b.getvalue()
 
 
-def big_deck(deck_id):
+def big_deck(deck_id, n=None):
     """400 cards = 800 image files (an image and a mask each); card 350's mask is the wrong size."""
+    N = n or globals()["N"]
     r = np.random.default_rng(3)
     out = io.BytesIO()
     cards = []
@@ -141,6 +142,14 @@ def main():
           return await new Promise((res) => { const q = d.transaction("answers").objectStore("answers").getAll(); q.onsuccess = () => res(q.result.filter((a) => a.deck === "big-2").length); }); }""")
         check(took is not None and page.evaluate(IDB, ["files", "big-2"]) == 2 * N - 2 and answers == 1,
               f"it finishes ({took and round(took)} s), and the answer given before the restart is kept ({answers})")
+
+        print("A mid-sized deck (50 cards, 100 images) starts after its first cards too")
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+        page.locator("#file").set_input_files(str(big_deck("mid-1", n=50)))
+        page.locator(".sheet h3", has_text="Ready").wait_for(timeout=60000)
+        sheet = page.locator(".sheet").inner_text()
+        check("Start now" in sheet and "the other 4" in sheet, f"it opens after its first cards (12 images), the other 44 load meanwhile ({sheet.splitlines()[2][:90] if len(sheet.splitlines()) > 2 else sheet!r})")
+        page.keyboard.press("Escape"); page.wait_for_timeout(300)
 
         print("Small decks are unchanged")
         page.goto(base + "#/"); page.wait_for_selector(".hero")

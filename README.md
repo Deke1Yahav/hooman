@@ -37,7 +37,7 @@ app/                    the whole app: static files, no build step
   vendor/qrcode.mjs     QR code generator (Kazuhiko Arase, MIT)
   js/prefs.js           per-viewer settings (localStorage)
   js/deck.js            deck.json -> normalized deck + LLM-pasteable errors
-  js/importer.js        zip / deck.json / link import, size checks; big zips (300+ images) open after their first cards
+  js/importer.js        zip / deck.json / link import, size checks; big zips (40+ images or 30+ MB) open after their first card
   js/decksfolder.js     the decks folder: deck zips put in a picked folder show up by themselves (and update their decks)
   js/handles.js         picked folders kept between visits (with a guard for browsers that crash reading them back)
   js/loading.js         the background loading of big decks: the card on screen first, resumable by picking the zip again

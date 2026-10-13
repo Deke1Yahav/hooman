@@ -44,9 +44,10 @@ async function pool(items, n, fn) {
   await Promise.all(workers);
 }
 
-// Decks with more image files than this open at once: the first cards are checked now, the rest load in the
-// background while the hooman works (loading.js). Smaller decks are checked and stored whole, as before.
-const LAZY_FILES = 300, FIRST_CARDS = 8;
+// Zips with more image files (or bytes) than this open at once: the first card or two (up to FIRST_FILES files)
+// are checked now, the rest load in the background while the hooman works (loading.js). Smaller decks (the
+// examples have 24 images at most) are checked and stored whole, as before.
+const LAZY_FILES = 40, LAZY_BYTES = 30e6, FIRST_FILES = 12;
 export const cardPaths = (card) => [...new Set([...card.frames.flatMap((f) => [f.path, ...(f.channels || [])]),
   ...card.overlays.filter((o) => o.shape === "mask").map((o) => o.mask)])];
 
@@ -103,8 +104,13 @@ async function load(source, rawText, onProgress) {
   const raw = parseJSON(rawText);
   const { deck, errors, warnings, paths } = normalizeDeck(raw, source, source.name);
   if (!deck) throw new ImportError(errors, warnings);
-  const list = [...paths], lazy = source.kind === "zip" && list.length > LAZY_FILES && deck.cards.length > FIRST_CARDS;
-  const now = lazy ? deck.cards.slice(0, FIRST_CARDS) : deck.cards;
+  const list = [...paths], zipBytes = source.size ? list.reduce((t, p) => t + (isURL(p) ? 0 : source.size(p)), 0) : 0;
+  const lazy = source.kind === "zip" && deck.cards.length > 1 && (list.length > LAZY_FILES || zipBytes > LAZY_BYTES);
+  let now = deck.cards;
+  if (lazy) {                                   // the first card, and the next ones while they stay small
+    now = []; let k = 0;
+    for (const c of deck.cards) { const n = cardPaths(c).length; if (now.length && k + n > FIRST_FILES) break; now.push(c); k += n; }
+  }
   const inCards = new Set(deck.cards.flatMap(cardPaths));
   const read = lazy ? [...new Set([...now.flatMap(cardPaths), ...list.filter((p) => !inCards.has(p))])] : list;
   const blobs = new Map(), sizes = new Map(), errs = [];
@@ -119,7 +125,7 @@ async function load(source, rawText, onProgress) {
   let big = 0;
   now.forEach((card, i) => { if (checkCard(card, i, sizes, errs, warnings)) big++; });
   if (big) warnings.push(`${big} card${big > 1 ? "s have images" : " has an image"} larger than 4096 px; phones may be slow (keep the long side at 2048 px or less)`);
-  const bytes = lazy && source.size ? list.reduce((t, p) => t + (isURL(p) ? 0 : source.size(p)), 0) : [...blobs.values()].reduce((t, b) => t + b.size, 0);
+  const bytes = lazy && source.size ? zipBytes : [...blobs.values()].reduce((t, b) => t + b.size, 0);
   if (bytes > 150e6) warnings.push(`this deck is ${Math.round(bytes / 1e6)} MB; phones are happiest under about 100 MB per deck. Split big sets into parts (llms.txt section 1b)`);
   if (deck.cards.length > 2000) warnings.push(`this deck has ${deck.cards.length} cards; split it into parts of up to about 1000 (llms.txt section 1b)`);
   if (errs.length) throw new ImportError(errs, warnings);
