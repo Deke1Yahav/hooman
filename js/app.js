@@ -128,53 +128,83 @@ async function saveRec(rec) {
 const modeOf = (deck) => deck.mode || (deck.question ? "swipe" : "annotate");
 
 // ---------------------------------------------------------------- home
+// A new hooman sees how to start: an example, a deck made with AI, a decks folder. Someone with decks sees their
+// decks: the decks folder's status line, at most one banner, one list (what is in progress first), and "+ Add a deck"
+// for every other way in. Nothing is out of reach: the rest is in the "+ Add a deck" and Help sheets.
+const whenShort = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toDateString() === new Date().toDateString() ? hhmm(iso) : d.toLocaleDateString([], { day: "numeric", month: "short" });
+};
+const zipTitle = (name) => name.split("/").pop().replace(/\.hooman\.zip$|\.zip$/i, "");
+const sizeMB = (n) => `${n >= 1e7 ? Math.round(n / 1e6) : (n / 1e6).toFixed(1)} MB`;
+function deckRow(d, done) {
+  const n = d.deck.cards.length, pct = n ? (100 * done) / n : 0, lo = loadingOf(d.key);
+  const zip = lo && !lo.active && dfolder.isOn() ? dfolder.zipOf(d.key) : "";
+  const sub = lo ? (lo.active ? "Saving to the phone…" : `<b class="warn">Not fully on the phone · ${zip ? "tap to finish" : "pick its zip again"}</b>`)
+    : n && done >= n ? `Done${d.openedAt ? ` · opened ${whenShort(d.openedAt)}` : ""}`
+    : done ? `Opened ${whenShort(d.openedAt || d.updatedAt)}` : `New · ${n} card${n === 1 ? "" : "s"}`;
+  return `<button class="deckrow" ${zip ? `data-act="finishzip" data-zip="${esc(zip)}"` : `data-open="${esc(d.key)}"`}>
+      <b>${esc(d.title)}</b><span class="count">${n && done >= n ? "✓ " : ""}${done} / ${n}</span>
+      <div class="pbar"><i style="width:${pct}%"></i></div><span class="sub">${sub}</span></button>`;
+}
+const cloudRow = (a) => `<button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
+      <b>${esc(zipTitle(a.name))}</b><span class="count">☁ ${sizeMB(a.size)}</span>
+      <span class="sub">${a.update ? "A newer version is in your folder · tap to load" : "In your folder · tap to load"}</span></button>`;
+
+function folderLine() {
+  if (!dfolder.isOn()) return "";
+  const s = dfolder.status(), name = dfolder.folderName();
+  if (s.status === "checking") return `<div class="folder-line busy"><span>📂 ${esc(s.msg || `Checking “${name}”…`)}</span><button class="btn quiet" data-act="stopcheck">Stop</button></div>`;
+  if (s.status === "paused") return `<button class="folder-line warn" data-act="checkdecks"><span>📂 “${esc(name)}” needs a tap to be read again</span><b>Reconnect</b></button>`;
+  const n = s.found, errs = s.errors.length;
+  return `<button class="folder-line" data-act="checkdecks" aria-label="Check the decks folder now"><span>📂 ${esc(name)}${s.at ? ` · ${n} deck${n === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : " · tap to check"}</span><b aria-hidden="true">↻</b></button>
+    ${errs ? `<button class="link-btn folder-errs" data-act="folderrors">${errs} zip${errs > 1 ? "s" : ""} in the folder couldn't be opened: see why</button>` : ""}`;
+}
+
 async function home() {
-  const decks = (await store.listDecks()).sort((a, b) => (b.openedAt || b.updatedAt).localeCompare(a.openedAt || a.updatedAt));
+  const decks = await store.listDecks();
   const all = await Promise.all(decks.map((d) => store.answersOf(d.key)));
-  const counts = all.map((a) => a.length);
+  const counts = new Map(decks.map((d, i) => [d.key, all[i].length]));
   const since = lastBackup();
   const unsaved = all.flatMap((list, i) => list.filter((a) => a.at > since && a.at > (decks[i].exportedAt || "") && a.at > live.lastSaved(decks[i].key)));
   const oldest = unsaved.reduce((m, a) => (a.at < m ? a.at : m), "9999");
   const stale = unsaved.length && (unsaved.length >= 20 || Date.now() - Date.parse(oldest) > 2 * 864e5);
+  const folderOn = dfolder.isOn(), avail = folderOn ? dfolder.status().available : [];
   // Finished decks (every card answered) go to the Archive tab, unless the hooman moved them (deck menu: rec.shelf).
-  const archived = decks.map((d, i) => d.shelf === "archive" || (d.shelf !== "active" && d.deck.cards.length > 0 && counts[i] >= d.deck.cards.length));
-  const nArch = archived.filter(Boolean).length;
+  const archivedOf = (d) => d.shelf === "archive" || (d.shelf !== "active" && d.deck.cards.length > 0 && counts.get(d.key) >= d.deck.cards.length);
+  const active = decks.filter((d) => !archivedOf(d)), archived = decks.filter(archivedOf);
+  const nArch = archived.length, nTodo = active.length + avail.length;
   const tab = nArch && prefs.get("homeTab", "decks") === "archive" ? "archive" : "decks";
-  const rows = decks.map((d, i) => {
-    if (archived[i] !== (tab === "archive")) return "";
-    const n = d.deck.cards.length, done = counts[i], pct = n ? (100 * done) / n : 0;
-    const mode = modeOf(d.deck), kind = mode === "swipe" ? "" : ` · ${mode}`;
-    return `<button class="deckrow" data-open="${esc(d.key)}">
-      <b>${esc(d.title)}</b><span class="count">${done >= n && n ? "✓ " : ""}${done} / ${n}</span>
-      <div class="pbar"><i style="width:${pct}%"></i></div>
-      <span class="sub">${esc(d.key)}${kind} · ${esc((d.updatedAt || "").slice(0, 10))}${loadNote(d.key) ? ` · <b class="loadnote">${loadNote(d.key)}</b>` : ""}</span></button>`;
-  }).join("");
-  const nActive = decks.length - nArch;
-  app.innerHTML = `<main class="screen">
-    <div class="hero"><img src="icons/icon-192.png" alt=""><div><h1>Hooman in the Loop</h1><p>The AI guesses. The hooman decides.</p></div>
-      <button class="icon-btn" data-act="settings" aria-label="Settings and backup" style="margin-left:auto">⚙</button></div>
-    <div id="install-slot">${installBanner()}</div>
-    <div id="folder-progress">${folderProgress()}</div>
-    ${dfolder.isOn() && dfolder.status().status === "paused" ? `<div class="banner"><span>The decks folder “${esc(dfolder.folderName())}” needs a tap to be read again.</span><button class="btn quiet" data-act="checkdecks">Reconnect</button></div>` : ""}
-    ${decks.filter((d) => loadingOf(d.key) && !loadingOf(d.key).active).map((d) => dfolder.isOn() && dfolder.zipOf(d.key)
-      ? `<div class="banner"><span>“${esc(d.title)}” isn't fully saved on the phone yet. It finishes from your decks folder.</span><button class="btn quiet" data-act="finishzip" data-zip="${esc(dfolder.zipOf(d.key))}">Finish now</button></div>`
-      : `<div class="banner"><span>“${esc(d.title)}” wasn't fully saved when the app closed. Pick its zip again to finish.</span><button class="btn quiet" data-act="repick">Pick the zip</button></div>`).join("")}
-    ${stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this device.</span><button class="btn quiet" data-act="backup">Back up</button></div>` : ""}
-    <div class="actions">
-      <button class="btn" data-act="import">＋ Import deck</button>
-      <button class="btn quiet" data-act="link">From a link</button>
+  const newcomer = !decks.length && !avail.length && !folderOn;
+  const opened = (x, y) => (y.openedAt || y.updatedAt || "").localeCompare(x.openedAt || x.updatedAt || "");
+  const arrived = (x, y) => (y.importedAt || y.updatedAt || "").localeCompare(x.importedAt || x.updatedAt || "");
+  const going = active.filter((d) => counts.get(d.key) > 0).sort(opened), fresh = active.filter((d) => !counts.get(d.key)).sort(arrived);
+  const row = (d) => deckRow(d, counts.get(d.key));
+  const list = tab === "archive" ? archived.sort(opened).map(row).join("")
+    : (going.length && fresh.length + avail.length ? `<div class="list-div">Continue</div>` : "") + going.map(row).join("")
+      + (going.length && fresh.length + avail.length ? `<div class="list-div">New</div>` : "") + fresh.map(row).join("") + avail.map(cloudRow).join("");
+  const gear = `<button class="icon-btn" data-act="settings" aria-label="Settings and backup" style="margin-left:auto">⚙</button>`;
+  const banner = stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this phone.</span><button class="btn quiet" data-act="backup">Back up</button></div>`
+    : `<div id="install-slot">${installBanner()}</div>`;
+  app.innerHTML = `<main class="screen home">
+    ${newcomer ? `<div class="hero"><img src="icons/icon-192.png" alt=""><div><h1>Hooman in the Loop</h1><p>The AI guesses. The hooman decides.</p></div>${gear}</div>`
+      : `<div class="hero compact"><img src="icons/icon-192.png" alt=""><h1>Hooman in the Loop</h1>${gear}</div>`}
+    ${banner}
+    <div id="folder-line">${folderLine()}</div>
+    ${newcomer ? `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask.</div>
+    <div class="start">
+      <button class="btn" data-act="examples">🎯 Try an example</button>
       <button class="btn quiet" data-act="ai">✨ Make a deck with AI</button>
-      <button class="btn quiet" data-act="examples">Try an example</button>
-      <button class="btn quiet ${drive.googleReady() ? "" : "wide"}" data-act="photos">📷 New deck from photos</button>
-      ${drive.googleReady() ? `<button class="btn quiet" data-act="drive">Open from Google Drive</button>` : ""}
-    </div>
-    <div class="section-title">${nArch ? `<span class="seg tabs"><button data-act="tab" data-tab="decks" aria-pressed="${tab === "decks"}">My decks (${nActive})</button><button data-act="tab" data-tab="archive" aria-pressed="${tab === "archive"}">Archive (${nArch})</button></span>` : "Your decks"}${dfolder.isOn() ? `<button class="link-btn sec-act" data-act="checkdecks">↻ check folder</button>` : ""}</div>
-    ${decks.length && !rows ? `<div class="empty">${tab === "decks" ? `<b>All done.</b> Finished decks are in the Archive. Import a new deck, or drop one in your decks folder.` : "Nothing archived."}</div>` : ""}
-    ${tab === "decks" && dfolder.isOn() && dfolder.status().available.length ? `<div class="section-sub">In your decks folder, not on this phone yet: tap to load</div><div class="decks">${dfolder.status().available.map((a) => `<button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
-      <b>${esc(a.name.split("/").pop().replace(/\.hooman\.zip$|\.zip$/i, ""))}</b><span class="count">☁ ${(a.size / 1e6).toFixed(a.size >= 1e7 ? 0 : 1)} MB</span>
-      <span class="sub">${a.update ? "a newer version of a deck you have · " : ""}${esc(a.name)}</span></button>`).join("")}</div>` : ""}
-    ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.<br>New here? <button class="link-btn" data-videos>▶ Watch the ${GUIDE_VIDEOS[0].min} video guide</button></div>`}
-    <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><button class="link-btn" data-videos>▶ Video guide</button> · <button class="link-btn" data-guide>☁ Drive guide</button><br><a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
+      ${dfolder.supported() ? `<button class="btn quiet two" data-act="connect">📂 Connect a decks folder<small>Put deck zips in a folder (Google Drive works): they show up here by themselves.</small></button>` : ""}
+      <button class="link-btn" data-act="add">More ways to add a deck</button>
+      <button class="link-btn" data-videos>▶ Watch the ${GUIDE_VIDEOS[0].min} video guide</button>
+    </div>` : `
+    ${nArch ? `<div class="tabs-row"><span class="seg tabs"><button data-act="tab" data-tab="decks" aria-pressed="${tab === "decks"}">To do (${nTodo})</button><button data-act="tab" data-tab="archive" aria-pressed="${tab === "archive"}">Archive (${nArch})</button></span></div>`
+      : `<div class="section-title">To do${nTodo ? ` (${nTodo})` : ""}</div>`}
+    ${list ? `<div class="decks">${list}</div>` : `<div class="empty">${tab === "decks" ? `<b>All done.</b> Finished decks are in the Archive.${folderOn ? ` New zips put in “${esc(dfolder.folderName())}” show up here.` : ""}` : "Nothing archived."}</div>`}
+    ${tab === "decks" ? `<button class="btn quiet add-deck" data-act="add">+ Add a deck</button>` : ""}`}
+    <p class="foot-note">Stays on this device · <button class="link-btn" data-act="help">Help</button> · v${APP_VERSION}</p>
   </main>
   <input type="file" id="file" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json,application/octet-stream" hidden>`;
   const file = $("#file");
@@ -186,26 +216,64 @@ async function home() {
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
     if (b.dataset.act === "tab") { prefs.set("homeTab", b.dataset.tab); return home(); }
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
-       photos: photosSheet, drive: openFromDrive, install: installFlow, repick: pickZipAgain, checkdecks: decksCheckNow,
-       stopcheck: () => dfolder.stop(), loadzip: () => loadZip(b.dataset.zip), finishzip: () => loadZip(b.dataset.zip, true) })[b.dataset.act]();
+       photos: photosSheet, drive: openFromDrive, install: installFlow, installno: () => { prefs.set("installNo", true); home(); },
+       repick: pickZipAgain, checkdecks: decksCheckNow, stopcheck: () => dfolder.stop(), folderrors: () => decksAction("errors"),
+       loadzip: () => loadZip(b.dataset.zip), finishzip: () => loadZip(b.dataset.zip, true), connect: () => decksAction("on"),
+       add: addSheet, help: appHelp })[b.dataset.act]();
   };
+}
+
+// Every way to add a deck, behind "+ Add a deck" (the same actions as the newcomer's buttons).
+function addSheet() {
+  const folder = dfolder.isOn() ? dfolder.folderName() : "";
+  const sh = openSheet(`<h3>Add a deck</h3>
+    ${folder ? `<p>Or put a <span class="mono">.hooman.zip</span> in “${esc(folder)}”: it shows up here by itself.</p>` : ""}
+    <div class="menu add-menu">
+      <button class="btn quiet" data-act="import">＋ Import a zip from this phone</button>
+      <button class="btn quiet" data-act="link">🔗 From a link</button>
+      <button class="btn quiet" data-act="ai">✨ Make a deck with AI<small>copies a prompt for ChatGPT, Claude or Gemini</small></button>
+      <button class="btn quiet" data-act="photos">📷 New deck from photos</button>
+      <button class="btn quiet" data-act="examples">🎯 Try an example</button>
+      ${drive.googleReady() ? `<button class="btn quiet" data-act="drive">Open from Google Drive</button>` : ""}
+      ${!folder && dfolder.supported() ? `<button class="btn quiet" data-act="connect">📂 Connect a decks folder<small>deck zips put in it show up here by themselves</small></button>` : ""}
+    </div>
+    <p style="font-size:13px;margin-top:14px"><a href="llms.txt" target="_blank" style="color:var(--focus)">Deck format (for your AI)</a></p>`);
+  sh.el.onclick = (e) => {
+    const b = e.target.closest("[data-act]");
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === "import") { sh.close(); const f = $("#file"); return f && f.click(); }
+    ({ link: linkSheet, ai: aiSheet, photos: photosSheet, examples: examplesSheet, drive: openFromDrive, connect: () => { sh.close(); decksAction("on"); } })[act]();
+  };
+}
+
+// Help: the guides, the deck format, installing, the source.
+function appHelp() {
+  const canInstall = ["prompt", "steps", "installed"].includes(installState());
+  const sh = openSheet(`<h3>Help</h3>
+    <div class="menu">
+      <button class="btn quiet" data-videos>▶ Video guide (YouTube)</button>
+      <button class="btn quiet" data-guide>☁ Google Drive, OneDrive, Dropbox: how to</button>
+      <a class="btn quiet" href="llms.txt" target="_blank">Deck format (for your AI)</a>
+      ${canInstall ? `<button class="btn quiet" data-act="install">📲 Install the app</button>` : ""}
+      <a class="btn quiet" href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a>
+    </div>
+    <p class="muted" style="font-size:12px;margin-top:14px">Everything stays on this device: no account, no server. Version ${APP_VERSION}.</p>`);
+  sh.el.addEventListener("click", (e) => { if (e.target.closest("[data-act=install]")) installFlow(); });
 }
 
 // ---------------------------------------------------------------- install the app (shown only until it is installed)
 function installBanner() {
   const s = installState();
-  if (s !== "prompt" && s !== "steps") return "";
+  if ((s !== "prompt" && s !== "steps") || prefs.get("installNo", false)) return "";
   const text = isIOS() ? "<b>Add Hooman to your Home Screen.</b> It works offline, and Safari can't clear your answers after 7 days unused."
     : isAndroid() ? "<b>Install Hooman on this phone.</b> It opens from your home screen, full screen, and works offline."
     : "<b>Install Hooman on this computer.</b> It opens in its own window and works offline.";
-  return `<div class="banner install"><span>📲 ${text}</span><button class="btn" data-act="install">${s === "prompt" ? "Install" : "Show me"}</button></div>`;
+  return `<div class="banner install"><span>📲 ${text}</span><button class="btn" data-act="install">${s === "prompt" ? "Install" : "Show me"}</button><button class="x" data-act="installno" aria-label="Not now (Help keeps Install the app)">✕</button></div>`;
 }
-// The footer keeps a way to install even after the banner is gone (e.g. "I've installed it" by mistake), except in the app itself.
-const installLink = () => ["prompt", "steps", "installed"].includes(installState()) ? ` · <button class="link-btn" data-act="install">📲 Install the app</button>` : "";
 function refreshInstall(event) {
-  const slot = $("#install-slot"), link = $("#install-link");
+  const slot = $("#install-slot");
   if (slot) slot.innerHTML = installBanner();
-  if (link) link.innerHTML = installLink();
   if (event === "installed") toast("Installed. Open Hooman from your home screen.", 3500);
 }
 async function installFlow() {
@@ -332,10 +400,6 @@ function decksNothingNew() {
   toast(`“${dfolder.folderName()}”: ${why}${n ? ` (${n} zip${n > 1 ? "s" : ""} couldn't be opened: see Settings)` : ""}`, 5000);
 }
 const secs = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
-function folderProgress() {
-  const s = dfolder.status();
-  return s.status === "checking" && !s.quiet ? `<div class="banner install"><span>📂 ${esc(s.msg || "Checking the decks folder…")}</span><button class="btn quiet" data-act="stopcheck">Stop</button></div>` : "";
-}
 // "Tap to load" a deck waiting in the decks folder (or finish one that wasn't fully saved), then open it.
 async function loadZip(name, finish = false) {
   const key = await dfolder.load(name, S ? S.key : null);
@@ -1251,7 +1315,7 @@ function closeZoom() {
 // --- deck menu, help, answer editor
 const isArchived = (rec, answered) => rec.shelf === "archive" || (rec.shelf !== "active" && rec.deck.cards.length > 0 && answered >= rec.deck.cards.length);
 function deckMenu() {
-  const sh = openSheet(`<h3>${esc(S.rec.title)}</h3>
+  const sh = openSheet(`<h3>${esc(S.rec.title)}</h3><p class="mono muted" style="font-size:12px;margin:-4px 0 0">${esc(S.rec.key)}</p>
     <div class="menu">
       <button class="btn quiet" data-m="results">Results</button>
       <button class="btn quiet" data-m="review">Review and change answers</button>
@@ -1261,7 +1325,7 @@ function deckMenu() {
       <button class="btn quiet" data-m="team">Team folder on Google Drive</button>
       <button class="btn quiet" data-m="settings">Settings & backup</button>
       <button class="btn quiet" data-m="help">Help</button>
-      <button class="btn quiet" data-m="shelf">${isArchived(S.rec, S.answers.size) ? "Back to my decks" : "Move to archive"}</button>
+      <button class="btn quiet" data-m="shelf">${isArchived(S.rec, S.answers.size) ? "Back to To do" : "Move to archive"}</button>
       <button class="btn danger" data-m="delete">Delete this deck</button>
     </div>`);
   sh.el.onclick = (e) => {
@@ -1281,7 +1345,7 @@ function deckMenu() {
         const back = isArchived(rec, S.answers.size);
         rec.shelf = back ? "active" : "archive"; await saveRec(rec);
         prefs.set("homeTab", back ? "decks" : "archive");
-        sh.close(); toast(back ? "Back in My decks" : "Moved to the Archive"); go("#/");
+        sh.close(); toast(back ? "Back in To do" : "Moved to the Archive"); go("#/");
       },
       delete: () => deleteSheet(rec),
     })[m.dataset.m]();
@@ -1721,8 +1785,8 @@ async function start() {
   live.start().catch((e) => console.error(e));
   let folderShown = "";
   dfolder.onStatus((s) => {                       // new and updated decks from the decks folder
-    const fp = $("#folder-progress");
-    if (fp) fp.innerHTML = folderProgress();
+    const fl = $("#folder-line");
+    if (fl) fl.innerHTML = folderLine();
     const now = `${s.status}|${s.quiet}`;
     if (s.status === "checking") {               // the reconnect banner goes as soon as a check starts
       if (now !== folderShown && !S && parseHash().page === "home") { folderShown = now; home(); }
