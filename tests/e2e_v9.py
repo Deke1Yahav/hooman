@@ -44,6 +44,7 @@ PICK = """if (window.FileSystemHandle) {
   };
   const getFile = FileSystemFileHandle.prototype.getFile;
   FileSystemFileHandle.prototype.getFile = async function () {
+    window.__files = (window.__files || 0) + 1;
     const slow = +(localStorage.getItem("test:slowfile") || 0);
     if (slow) await new Promise((r) => setTimeout(r, slow));
     const f = await getFile.call(this);
@@ -281,6 +282,32 @@ def main():
         page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(1500)
         check(page.locator(".deckrow.cloud", has_text="tap-two").count() == 0, "a hidden zip stays out of the list after a check")
         page.evaluate("localStorage.removeItem('hooman:decks.autoMax'); localStorage.removeItem('test:decksdir')")
+
+        print("On a phone a check reads names only: Google Drive would download every zip to tell its size")
+        page.evaluate("localStorage.setItem('test:decksdir', 'names'); localStorage.setItem('hooman:decks.namesOnly', 'true')")
+        page.evaluate(PUT, ["names/name-one.hooman.zip", b64(small_deck("Name one", 2, "name-one"))])
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
+        page.locator(".sheet [data-decks=off]").click(); page.wait_for_timeout(300)
+        page.evaluate("window.__files = 0")
+        page.locator(".sheet [data-decks=on]").click(); page.wait_for_timeout(1500)
+        page.keyboard.press("Escape"); page.goto(base + "#/"); page.wait_for_selector(".hero")
+        cloud = page.locator(".deckrow.cloud", has_text="name-one")
+        check(page.evaluate("window.__files") == 0 and cloud.count() == 1, f"a new zip waits for a tap; only its name was read ({page.evaluate('window.__files')} files opened)")
+        cloud.click(); page.wait_for_selector(".card canvas", timeout=20000)
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+        page.evaluate(PUT, ["names/name-one.hooman.zip", b64(small_deck("Name one v2", 3, "name-one"))])
+        page.evaluate("window.__files = 0")
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(1500)
+        check(page.evaluate("window.__files") == 0 and page.locator(".deckrow", has_text="Name one v2").count() == 0,
+              "a known name is taken as unchanged: nothing downloaded")
+        page.locator(".deckitem", has_text="Name one").locator("[data-act=rowmenu]").click(); page.wait_for_selector(".sheet .menu")
+        page.locator(".sheet [data-r=update]").click(); page.wait_for_timeout(2000)
+        check(page.locator(".deckrow", has_text="Name one v2").count() == 1 and "Updated" in page.locator("#toast").inner_text(),
+              "⋮ Update from the folder downloads that zip and updates the deck")
+        page.locator(".deckitem", has_text="Name one v2").locator("[data-act=rowmenu]").click(); page.wait_for_selector(".sheet .menu")
+        page.locator(".sheet [data-r=update]").click(); page.wait_for_timeout(1500)
+        check("Already up to date" in page.locator("#toast").inner_text(), "and says so when it hasn't changed")
+        page.evaluate("localStorage.removeItem('hooman:decks.namesOnly'); localStorage.removeItem('test:decksdir')")
 
         print("After the background, the next tap anywhere reconnects both folders")
         page.evaluate("localStorage.setItem('test:perm', 'prompt')")

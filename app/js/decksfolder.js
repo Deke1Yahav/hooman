@@ -4,7 +4,10 @@
 //   - a new zip is imported (big ones open at once and load in the background, see loading.js). On a phone, a zip
 //     over AUTO_MAX waits for a tap instead ("available"): a Google Drive folder there downloads every zip in full
 //     before it can be read, and a dozen decks would be hundreds of MB on mobile data;
-//   - a zip that changed since it was last seen updates its deck, keeping the answers; the deck on screen waits;
+//   - a zip that changed since it was last seen updates its deck, keeping the answers; the deck on screen waits.
+//     On a phone a check reads names only (namesOnly): asking Android's Google Drive for a zip's size and date
+//     downloads the whole zip (measured: 8 zips of 25-35 MB, over a minute). A new name waits for a tap, a known
+//     name is taken as unchanged, and a deck's ⋮ "Update from the folder" downloads its zip to see;
 //   - a deck that was still being saved when the app closed finishes from its zip here.
 // Answer exports (*.answers.zip), backups and other files are skipped; the "results" subfolder is live save's.
 // Every step that waits on the folder has a time limit (counted only while the app is on screen), and a check can be
@@ -21,6 +24,7 @@ export const supported = () => typeof window.showDirectoryPicker === "function";
 const NAME = "decks-folder", AGAIN = 120000;          // background checks (app opened or back in front): at most this often
 const PHONE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const autoMax = () => prefs.get("decks.autoMax", PHONE ? 5e6 : Infinity);
+const namesOnly = () => prefs.get("decks.namesOnly", PHONE);
 const MB = (n) => `${n >= 1e7 ? Math.round(n / 1e6) : (n / 1e6).toFixed(1)} MB`;
 const short = (name) => name.split("/").pop();
 
@@ -182,7 +186,8 @@ async function entriesOf(h, label, ui) {
     }
   }
 }
-async function deckZips(d, ui) {
+// info(z): ask for this zip's size and date (getFile; on a phone a download). Those not asked have no file.
+async function deckZips(d, ui, info = () => true) {
   const out = [];
   let skipped = 0;
   const t0 = performance.now();
@@ -198,19 +203,22 @@ async function deckZips(d, ui) {
   await list(d, "", 0);
   const t1 = performance.now();
   let n = 0;
-  if (out.length) ui.step(`Getting the size and date of ${out.length} deck zip${out.length === 1 ? "" : "s"}`, { hint: "from Google Drive, nothing is downloaded", prog: [0, out.length] });
-  await pool(out, 6, async (z) => {
+  const ask = out.filter(info);
+  if (ask.length) ui.step(`Getting the size and date of ${ask.length} deck zip${ask.length === 1 ? "" : "s"}`,
+                          { hint: namesOnly() ? "Google Drive downloads each one first" : "from your folder", prog: [0, ask.length] });
+  await pool(ask, 6, async (z) => {
     try { z.file = await within(z.handle.getFile(), 60000, `Getting ${short(z.name)}`); }
     catch (e) {
       if (e.name !== "TimeoutError" && e.name !== "NotReadableError") throw e;
       z.unread = `${short(z.name)}: ${e.message}`; ui.line(`${z.unread} (tried again next check)`);
     }
-    ui.set({ prog: [++n, out.length] });
+    ui.set({ prog: [++n, ask.length] });
   });
   const t2 = performance.now();
-  if (out.length) ui.line(`Size and date of ${out.length} zip${out.length === 1 ? "" : "s"} in ${secs(t2 - t1)}`);
-  const zips = out.filter((z) => z.file).sort((x, y) => y.file.lastModified - x.file.lastModified);
-  return Object.assign(zips, { skipped, unread: out.filter((z) => !z.file).map((z) => ({ name: z.name, msg: z.unread })), timing: { list: t1 - t0, info: t2 - t1 } });
+  if (ask.length) ui.line(`Size and date of ${ask.length} zip${ask.length === 1 ? "" : "s"} in ${secs(t2 - t1)}`);
+  if (ask.length < out.length) ui.line(`${out.length - ask.length} zip${out.length - ask.length === 1 ? "" : "s"} by name only: on a phone Google Drive would download each one to tell its size and date`);
+  const zips = out.filter((z) => !z.unread).sort((x, y) => (y.file ? y.file.lastModified : 0) - (x.file ? x.file.lastModified : 0) || x.name.localeCompare(y.name));
+  return Object.assign(zips, { skipped, unread: out.filter((z) => z.unread).map((z) => ({ name: z.name, msg: z.unread })), timing: { list: t1 - t0, info: t2 - t1 } });
 }
 
 // The folder couldn't be read: paused (needs a tap: permission, folder gone) or fail (try again later). The zips'
@@ -239,10 +247,11 @@ export function check({ force = false, openKey = null, quiet = false, fresh = fa
       if (my !== runId) return;
       if (!d) { ui.line("No access to the folder: it needs a tap (Reconnect)"); return mine({ status: "paused", quiet: false, fail: "", msg: lost || (dir ? "" : "Tap Reconnect to choose the folder again.") }); }
       const t0 = performance.now();
-      const zips = await deckZips(d, ui);
+      const seen = prefs.get("decks.seen", {}), unsaved = (name) => { const v = seen[name], lo = v && v.deck && loadingOf(v.deck); return !!(lo && !lo.active); };
+      const zips = await deckZips(d, ui, namesOnly() ? (z) => unsaved(z.name) : () => true);
       if (my !== runId) return;
       handles.clear(); zips.forEach((z) => handles.set(z.name, z.handle));
-      const seen = prefs.get("decks.seen", {}), decks = new Set((await store.listDecks()).map((r) => r.key));
+      const decks = new Set((await store.listDecks()).map((r) => r.key));
       const added = [], updated = [], errors = [], unread = zips.unread.map((u) => u.msg);
       const available = st.available.filter((a) => zips.unread.some((u) => u.name === a.name));   // still waiting: Drive didn't say
       let found = 0, reading = 0, waiting = 0;
@@ -250,6 +259,16 @@ export function check({ force = false, openKey = null, quiet = false, fresh = fa
         found++;
         let was = seen[name];
         const base = short(name).replace(/\.hooman\.zip$|\.zip$/i, "");
+        if (!file) {                                           // by name only (a phone): see namesOnly
+          if (!was && decks.has(base)) { seen[name] = was = { mod: 0, size: 0, deck: base }; prefs.set("decks.seen", seen); }
+          if (was && was.hidden) continue;
+          const unreadBefore = was && was.errors && was.errors.some((m) => /could not read the zip|could not be read/i.test(m));
+          if (!was || was.removed || unreadBefore) {
+            if (!st.available.some((a) => a.name === name)) waiting++;
+            available.push({ name, size: was ? was.size : 0, mod: was ? was.mod : 0, update: false });
+          } else if (was.errors) errors.push({ name, errors: was.errors });
+          continue;
+        }
         if (!was && decks.has(base)) {                         // a deck already on the phone, imported by hand: known
           const rec = await store.getDeck(base);
           if (Date.parse(rec.updatedAt || 0) >= file.lastModified) { seen[name] = was = { mod: file.lastModified, size: file.size, deck: base }; prefs.set("decks.seen", seen); }
@@ -279,7 +298,7 @@ export function check({ force = false, openKey = null, quiet = false, fresh = fa
         if (r.updated) updated.push(r.updated);
         prefs.set("decks.seen", seen);
       }
-      if (waiting) ui.line(`${waiting} new zip${waiting > 1 ? "s" : ""} over ${MB(autoMax())} wait${waiting > 1 ? "" : "s"} for a tap on the home screen (nothing downloaded)`);
+      if (waiting) ui.line(`${waiting} new zip${waiting > 1 ? "s" : ""} wait${waiting > 1 ? "" : "s"} for a tap on the home screen (nothing downloaded)`);
       lastRun = Date.now();
       prefs.set("decks.available", available);
       const at = new Date().toISOString(), total = performance.now() - t0;
@@ -335,8 +354,10 @@ export function load(name, openKey = null, why = "you tapped it") {
         ui.step(`Asking Google Drive for ${short(name)}`, { hint: `Drive usually answers in seconds; gives up after ${secs(listMs())}` });
         h = await zipAt(d, name);
       }
-      ui.step(`Asking Google Drive for ${short(name)}`, { hint: "its size and date" });
-      const file = await within(h.getFile(), 60000, `Getting ${short(name)}`);
+      const known = st.available.find((a) => a.name === name) || prefs.get("decks.seen", {})[name] || {};
+      if (namesOnly()) ui.step(`Downloading ${short(name)} from Google Drive`, { hint: `${known.size ? `${MB(known.size)} · ` : ""}the whole zip comes first, then the deck opens` });
+      else ui.step(`Asking your folder for ${short(name)}`, { hint: "its size and date" });
+      const file = await within(h.getFile(), namesOnly() ? 10 * 60000 : 60000, `Getting ${short(name)}`);
       const seen = prefs.get("decks.seen", {});
       const r = await read(name, file, seen[name], openKey, true, ui);
       if (my !== runId) return null;
@@ -400,7 +421,7 @@ async function take(file, was, openKey, asked = false, onProgress) {
   if (id === openKey) return { later: true };                   // an update waits until the deck isn't on screen
   // First sight of a deck that is already here: update only if the zip is newer than the deck on the phone.
   if (!asked && !was && Date.parse(existing.updatedAt || 0) >= file.lastModified) return { deck: id };
-  if (asked && was && was.deck === id && was.mod === file.lastModified && !lo) return { deck: id };
+  if (asked && was && was.deck === id && !lo && (was.mod === file.lastModified || (!was.mod && Date.parse(existing.updatedAt || 0) >= file.lastModified))) return { deck: id };
   const rec = await saveDeck(imported, "update", existing);
   return { deck: rec.key, updated: rec.title };
 }
