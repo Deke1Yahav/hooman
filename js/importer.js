@@ -134,15 +134,17 @@ async function load(source, rawText, onProgress) {
 
 // For a card whose size isn't known: read it from its stored files (null if some file isn't stored).
 export async function storedCard(key, card) {
-  const sizes = new Map();
-  for (const p of cardPaths(card)) {
-    if (isURL(p)) return null;
+  const paths = cardPaths(card);
+  if (paths.some(isURL)) return null;
+  const got = await Promise.all(paths.map(async (p) => {
     const b = await store.getFile(key, p);
     if (!b) return null;
-    const sz = imageSize(new Uint8Array(await b.slice(0, 1 << 20).arrayBuffer()));
-    if (!sz) return null;
-    sizes.set(p, sz);
-  }
+    let sz = imageSize(new Uint8Array(await b.slice(0, 65536).arrayBuffer()));
+    if ((!sz || (sz.type === "jpeg" && !sz.w)) && b.size > 65536) sz = imageSize(new Uint8Array(await b.slice(0, 1 << 20).arrayBuffer()));
+    return sz ? [p, sz] : null;
+  }));
+  if (got.some((x) => !x)) return null;
+  const sizes = new Map(got);
   const errs = [];
   checkCard(card, 0, sizes, errs, []);
   return errs.length ? { broken: errs.join(" ") } : { w: card.w, h: card.h };
