@@ -12,6 +12,7 @@ const listeners = new Set();
 const stateKey = (key) => `loading:${key}`;
 
 export function onLoading(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+export const savingAny = () => jobs.size > 0;           // a deck is being saved now (a reload would stop it)
 const emit = (key, ev) => listeners.forEach((fn) => { try { fn(key, ev); } catch (e) { console.error(e); } });
 
 // null when the deck is saved whole; else {total (cards), active (saving now, in this session)}

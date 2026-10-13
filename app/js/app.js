@@ -19,7 +19,7 @@ import { readAnswers } from "./backup.js";
 import { installState, promptInstall, markInstalled, watchInstall, isIOS, isAndroid } from "./install.js";
 import * as live from "./livesave.js";
 import * as dfolder from "./decksfolder.js";
-import { loadingOf, onLoading, ensureCard, forgetLoading } from "./loading.js";
+import { loadingOf, onLoading, ensureCard, forgetLoading, savingAny } from "./loading.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -1899,9 +1899,27 @@ async function openReview(key) {
   };
 }
 
+// A new version (sw.js) took over, and this page still runs the old one: it reloads into the new one on the home
+// screen with no sheet open, when no folder read or deck save is under way; else as soon as that's so. The first
+// install (no version before) isn't one. Coming back to the front asks the server for a new version.
+let updateReady = false;
+function reloadIfReady() {
+  if (updateReady && !S && !sheetOpen && parseHash().page === "home" && dfolder.status().status !== "checking" && !savingAny()) location.reload();
+}
+function watchUpdates() {
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  const had = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (had) { updateReady = true; reloadIfReady(); } });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") navigator.serviceWorker.getRegistration().then((r) => r && r.update()).catch(() => {});
+  });
+  setInterval(reloadIfReady, 3000);
+}
+
 // ---------------------------------------------------------------- start
 async function start() {
-  if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
+  watchUpdates();
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheetOpen && sheetOpen.dismissable) closeSheet(); });
   watchInstall(refreshInstall);
   document.addEventListener("click", (e) => { if (e.target.closest("[data-guide]")) driveGuide(); if (e.target.closest("[data-videos]")) videoSheet(); });
