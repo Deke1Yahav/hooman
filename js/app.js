@@ -18,6 +18,7 @@ import * as drive from "./drive.js";
 import { readAnswers } from "./backup.js";
 import { installState, promptInstall, markInstalled, watchInstall, isIOS, isAndroid } from "./install.js";
 import * as live from "./livesave.js";
+import * as dfolder from "./decksfolder.js";
 import { loadingOf, onLoading, ensureCard, want, forgetLoading } from "./loading.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -147,6 +148,7 @@ async function home() {
     <div class="hero"><img src="icons/icon-192.png" alt=""><div><h1>Hooman in the Loop</h1><p>The AI guesses. The hooman decides.</p></div>
       <button class="icon-btn" data-act="settings" aria-label="Settings and backup" style="margin-left:auto">⚙</button></div>
     <div id="install-slot">${installBanner()}</div>
+    ${dfolder.isOn() && dfolder.status().status === "paused" ? `<div class="banner"><span>The decks folder “${esc(dfolder.folderName())}” needs a tap to be read again.</span><button class="btn quiet" data-act="checkdecks">Reconnect</button></div>` : ""}
     ${decks.filter((d) => loadingOf(d.key) && !loadingOf(d.key).active).map((d) => `<div class="banner"><span>“${esc(d.title)}” has ${loadingOf(d.key).left} cards still to load. Pick its zip again to finish.</span><button class="btn quiet" data-act="repick">Pick the zip</button></div>`).join("")}
     ${stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this device.</span><button class="btn quiet" data-act="backup">Back up</button></div>` : ""}
     <div class="actions">
@@ -157,7 +159,7 @@ async function home() {
       <button class="btn quiet ${drive.googleReady() ? "" : "wide"}" data-act="photos">📷 New deck from photos</button>
       ${drive.googleReady() ? `<button class="btn quiet" data-act="drive">Open from Google Drive</button>` : ""}
     </div>
-    <div class="section-title">Your decks</div>
+    <div class="section-title">Your decks${dfolder.isOn() ? `<button class="link-btn sec-act" data-act="checkdecks">↻ check folder</button>` : ""}</div>
     ${decks.length ? `<div class="decks">${rows}</div>` : `<div class="empty"><b>No decks yet.</b> A deck is a zip of images plus a small <span class="mono">deck.json</span> that says what to ask. Ask any AI chat to make one for your images (✨ above), or try an example.<br>New here? <button class="link-btn" data-videos>▶ Watch the ${GUIDE_VIDEOS[0].min} video guide</button></div>`}
     <p class="foot-note">Everything stays on this device. No account, no server.<br><a href="llms.txt" target="_blank">Deck format (for your AI)</a><span id="install-link">${installLink()}</span><br><button class="link-btn" data-videos>▶ Video guide</button> · <button class="link-btn" data-guide>☁ Drive guide</button><br><a href="https://github.com/Deke1Yahav/hooman" target="_blank" rel="noopener">Free and open source (MIT)</a> · v${APP_VERSION}</p>
   </main>
@@ -170,7 +172,7 @@ async function home() {
     if (!b) return;
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
-       photos: photosSheet, drive: openFromDrive, install: installFlow, repick: pickZipAgain })[b.dataset.act]();
+       photos: photosSheet, drive: openFromDrive, install: installFlow, repick: pickZipAgain, checkdecks: decksCheckNow })[b.dataset.act]();
   };
 }
 
@@ -275,6 +277,38 @@ function showUnloaded(card, why) {
        <div class="row"><button class="btn" data-act="repick">Pick the zip again</button><button class="btn quiet" data-act="skip">Skip</button></div>`}</div>`;
 }
 
+// ---------------------------------------------------------------- decks folder (decksfolder.js)
+function decksRow() {
+  const s = dfolder.status(), on = dfolder.isOn(), name = dfolder.folderName();
+  const computer = !(isIOS() || isAndroid());
+  if (!on) return `<div class="live-row"><div><b>📂 Decks folder</b><span>Off. Pick a folder once: every deck zip you put in it shows up here by itself${computer ? ". A Google Drive, OneDrive or Dropbox folder on this computer works too" : ""}.</span></div><button class="btn" data-decks="on">Choose a folder</button></div>`;
+  const line = s.status === "paused" ? `Paused. ${s.msg || "Tap Reconnect."}` : s.status === "checking" ? "Checking…"
+    : `Folder “${name}”${s.at ? ` · ${s.found} deck zip${s.found === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : ""}`;
+  const resultsHere = live.status().folder.status !== "off" && live.folderName() === "results";
+  return `<div class="live-row"><div><b>📂 Decks folder</b><span>${esc(line)}</span></div>
+      ${s.status === "paused" ? `<button class="btn" data-decks="reconnect">Reconnect</button>` : `<button class="btn quiet" data-decks="check">Check now</button>`}<button class="btn quiet" data-decks="off">Turn off</button></div>
+    ${s.errors.length ? `<p style="font-size:13px;margin:6px 0 0"><button class="link-btn" data-decks="errors" style="color:var(--yellow)">${s.errors.length} zip${s.errors.length > 1 ? "s" : ""} in the folder couldn't be opened: see why</button></p>` : ""}
+    ${live.canFolder() ? `<p class="muted" style="font-size:13px;margin:6px 0 0">${resultsHere ? `Your answers are saved into “results” in this folder (live save).` : `<button class="link-btn" data-decks="results">Save my answers into this folder too</button> (a “results” folder inside it, a few seconds after each answer)`}</p>` : ""}`;
+}
+async function decksAction(what) {
+  try {
+    if (what === "on") await dfolder.choose();
+    else if (what === "off") { await dfolder.turnOff(); toast("The decks folder is off"); }
+    else if (what === "reconnect") await dfolder.reconnect();
+    else if (what === "check") { await dfolder.check({ force: true, openKey: S && S.key }); decksNothingNew(); }
+    else if (what === "errors") {
+      const e = dfolder.status().errors;
+      return showErrors(e.flatMap((x) => x.errors.map((m) => `${x.name}: ${m}`)), []);
+    }
+    else if (what === "results") { await live.useFolder(await dfolder.resultsFolder()); toast("Your answers now go into “results” in the decks folder"); }
+  } catch (err) { if (err && err.name !== "AbortError") showErrors([err.message || String(err)], []); }
+}
+function decksNothingNew() {
+  const s = dfolder.status();
+  if (s.status === "ok" && !s.added.length && !s.updated.length) toast(`Nothing new in “${dfolder.folderName()}”${s.errors.length ? ` (${s.errors.length} zip${s.errors.length > 1 ? "s" : ""} couldn't be opened: see Settings)` : ""}`);
+}
+function decksCheckNow() { return decksAction(dfolder.status().status === "paused" ? "reconnect" : "check"); }
+
 // ---------------------------------------------------------------- live save (Settings rows, deck header mark)
 const hhmm = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 function liveLine(t) {
@@ -329,6 +363,7 @@ async function settingsSheet() {
   const sh = openSheet(`<h3>Settings & backup</h3>
     <label class="field">Your name <span class="muted">(goes into exports, to compare annotators)</span><input type="text" id="set-name" value="${esc(annotator())}" placeholder="e.g. Dekel" maxlength="60" autocomplete="name"></label>
     <div class="field">Colours <span class="seg"><button data-col="standard" aria-pressed="${colorMode() !== "cb"}">Standard</button><button data-col="cb" aria-pressed="${colorMode() === "cb"}">Colour-blind safe</button></span></div>
+    ${dfolder.supported() ? `<div class="section-title">Decks folder</div><div id="decks-row">${decksRow()}</div>` : ""}
     <div class="section-title">Live save</div>
     <p>Every answer is stored on this device the moment you give it. Live save also keeps a copy elsewhere, a few seconds later: one answers file per deck, like Export.</p>
     <div id="live-rows">${liveRows()}</div>
@@ -344,7 +379,9 @@ async function settingsSheet() {
       <button class="btn quiet" data-guide>☁ Google Drive, OneDrive, Dropbox: how to</button>
       <button class="btn quiet" data-b="tour">Show the tour again</button></div>
     <input type="file" id="restore-file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream" hidden>`, { onClose: () => offLive() });
-  offLive = live.onStatus(() => { const box = $("#live-rows", sh.el); if (box) box.innerHTML = liveRows(); });
+  const offLive1 = live.onStatus(() => { const box = $("#live-rows", sh.el); if (box) box.innerHTML = liveRows(); const dr = $("#decks-row", sh.el); if (dr) dr.innerHTML = decksRow(); });
+  const offDecks = dfolder.onStatus(() => { const dr = $("#decks-row", sh.el); if (dr) dr.innerHTML = decksRow(); });
+  offLive = () => { offLive1(); offDecks(); };
   const nameIn = $("#set-name", sh.el);
   nameIn.addEventListener("change", () => { setAnnotator(nameIn.value); toast(nameIn.value.trim() ? `Hi ${nameIn.value.trim()}` : "Name cleared"); });
   const rf = $("#restore-file", sh.el);
@@ -352,6 +389,8 @@ async function settingsSheet() {
   sh.el.onclick = (e) => {
     const lv = e.target.closest("[data-live]");
     if (lv) return liveAction(lv.dataset.live, lv.dataset.lt);
+    const dk = e.target.closest("[data-decks]");
+    if (dk) return decksAction(dk.dataset.decks);
     const t = e.target.closest("[data-col],[data-b]");
     if (!t) return;
     if (t.dataset.col) { setColorMode(t.dataset.col); $$("[data-col]", sh.el).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.col === colorMode()))); toast(colorMode() === "cb" ? "Colour-blind safe colours on" : "Standard colours"); return; }
@@ -1365,6 +1404,8 @@ function driveGuide() {
       <li>Tap the deck's <span class="mono">.zip</span>.</li></ol>
     ${live.canDrive() || live.canFolder() ? `<div class="section-title">Save automatically</div>
     <p>⚙ → <b>Live save</b>${live.canDrive() ? " → <b>Google Drive</b>" : ""}${live.canDrive() && live.canFolder() ? ", or" : ""}${live.canFolder() ? ` a folder${isIOS() || isAndroid() ? "" : " that your drive app syncs (OneDrive, Dropbox, Google Drive for desktop)"}` : ""}. Each deck's answers are copied there a few seconds after every answer, and the ☁ mark on the deck shows when they're saved.</p>` : ""}
+    ${dfolder.supported() ? `<div class="section-title">Decks that appear by themselves</div>
+    <p>⚙ → <b>Decks folder</b>: pick a folder${isIOS() || isAndroid() ? "" : " that your drive app syncs"}. Every deck zip put in it shows up in the app, and a newer zip of the same deck updates it (answers kept).</p>` : ""}
     <div class="section-title">Save answers or a backup to a drive</div>
     <ol class="steps">
       <li>Deck menu ⋮ → <b>Export answers</b> → <b>Share or save the .zip</b>. For everything at once: ⚙ → <b>Back up answers</b>.</li>
@@ -1626,6 +1667,17 @@ async function start() {
     toast("Answers from your other device were added");
   });
   live.start().catch((e) => console.error(e));
+  dfolder.onStatus((s) => {                       // new and updated decks from the decks folder
+    if (s.status === "checking") return;
+    if (s.status === "ok" && (s.added.length || s.updated.length)) {
+      const parts = [];
+      if (s.added.length) parts.push(`New from your folder: ${s.added.map((t) => `“${t}”`).join(", ")}`);
+      if (s.updated.length) parts.push(`Updated (answers kept): ${s.updated.map((t) => `“${t}”`).join(", ")}`);
+      toast(parts.join(" · "), 4500);
+    }
+    if (!S && parseHash().page === "home") home();       // new decks, or the reconnect banner comes and goes
+  });
+  dfolder.start(() => (S ? S.key : null));
   onLoading((key, ev) => {
     if (!ev.done) return;
     store.getDeck(key).then((rec) => rec && toast(`“${rec.title}”: all ${ev.total} cards are on the phone${ev.broken ? ` (${ev.broken} can't be shown; you'll see why on the card)` : ""}`, 4500));
