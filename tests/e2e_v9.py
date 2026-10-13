@@ -171,6 +171,22 @@ def main():
         page.goto(base + "#/"); page.wait_for_selector(".hero")
         check(done and page.locator(".banner", has_text="fully saved").count() == 0, f"after a restart it finishes from the folder without asking ({time.time() - t0:.0f} s)")
 
+        print("A card 0.7 marked broken because its file couldn't be read is finished from the folder")
+        page.evaluate("""async () => { const d = await new Promise((res) => { const r = indexedDB.open("hooman"); r.onsuccess = () => res(r.result); });
+          const rec = await new Promise((res) => { const q = d.transaction("decks").objectStore("decks").get("folder-big"); q.onsuccess = () => res(q.result); });
+          const c = rec.deck.cards[300]; delete c.w; delete c.h;
+          c.broken = "The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.";
+          await new Promise((res) => { const tx = d.transaction(["decks", "archives"], "readwrite"); tx.objectStore("decks").put(rec); tx.objectStore("archives").delete("folder-big"); tx.oncomplete = res; }); }""")
+        page.reload(); page.wait_for_selector(".hero"); page.wait_for_timeout(800)
+        page.goto(base + "#/deck/folder-big?card=c300"); page.wait_for_selector(".card-note", timeout=20000)
+        note = page.locator(".card-note").inner_text()
+        check("can't be shown" not in note and "isn't on the phone yet" in note and page.locator(".card-note [data-act=finishzip]").count() == 1,
+              f"not 'can't be shown' any more: the card offers Finish now ({note.splitlines()[0]!r})")
+        page.locator(".card-note [data-act=finishzip]").click()
+        page.locator(".cardfoot", has_text="c300").wait_for(timeout=60000)
+        check(page.locator(".card canvas").count() == 1 and page.locator(".card-note").count() == 0, "one tap: the deck is saved from the folder and the card shows")
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+
         print("The permission lapses: one tap brings it back")
         page.evaluate("localStorage.setItem('test:perm', 'prompt')")
         page.reload(); page.wait_for_selector(".hero"); page.wait_for_timeout(800)
