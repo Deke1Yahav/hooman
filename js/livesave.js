@@ -13,7 +13,7 @@
 import * as store from "./store.js";
 import * as drive from "./drive.js";
 import { prefs } from "./prefs.js";
-import { buildExport } from "./export.js";
+import { buildExport, APP_VERSION } from "./export.js";
 import { restoreAnswers } from "./backup.js";
 import { annotator, fileSafe } from "./settings.js";
 import { loadHandle, saveHandle } from "./handles.js";
@@ -111,6 +111,7 @@ async function saveDeck(key) {
   for (const t of todo) {
     try {
       setFile(t, key, t === "drive" ? await driveWrite(key, name, out.zip, where[t]) : await folderWrite(name, out.zip));
+      if (t === "folder") statusSoon();
       if ((gen.get(key) || 0) === g) { const d = dirtyOf(t); d.delete(key); setDirty(t, d); }
       const at = new Date().toISOString();
       prefs.set("live.savedAt", { ...prefs.get("live.savedAt", {}), [key]: at });
@@ -198,6 +199,7 @@ export async function enable(t) {
 // Save into this folder from now on (a picked one, or the decks folder's "results").
 export async function useFolder(h) {
   dir = h; folderLost = false; await saveHandle("live-folder", h);
+  statusSoon();
   prefs.set("live.folderName", h.name); prefs.set("live.files.folder", {});
   const t = "folder";
   prefs.set(`live.${t}`, true);
@@ -230,12 +232,51 @@ async function refresh() {
   }
 }
 
+// ---------------------------------------------------------------- the status table (next to the answers, for the hooman's AI)
+// hooman-status.<name>.json and .csv: one row per deck on this device: its zip in the decks folder, cards, answered,
+// open, state, last answer, the answers file, when it was saved, and how far the AI got (processed.json, which the
+// AI writes: {"files": {answers file name: {"up_to": newest answer time it used, ...}}}).
+const STATUS_COLS = ["deck", "title", "zip", "cards", "answered", "open", "state", "last_answer_at", "answers_file", "saved_at", "processed_up_to", "new_since_processed"];
+let statusTimer = null;
+export function statusSoon() {
+  if (!isOn("folder")) return;
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => { writeStatus().catch((e) => console.warn("live save: status table", e)); }, 2500);
+}
+async function writeStatus() {
+  if ((await ready("folder")) !== "ready") return;
+  let ledger = {};
+  try { ledger = JSON.parse(await (await (await dir.getFileHandle("processed.json")).getFile()).text()).files || {}; } catch { /* none yet */ }
+  const zipOf = {};
+  for (const [name, v] of Object.entries(prefs.get("decks.seen", {}))) if (v && v.deck) zipOf[v.deck] = name;
+  const rows = [];
+  for (const rec of await store.listDecks()) {
+    const answers = await store.answersOf(rec.key), cards = rec.deck.cards.length, file = fileName(rec.key), led = ledger[file];
+    rows.push({
+      deck: rec.key, title: rec.title, zip: zipOf[rec.key] || "", cards, answered: answers.length, open: Math.max(0, cards - answers.length),
+      state: !answers.length ? "not started" : answers.length >= cards ? "done" : "in progress",
+      last_answer_at: answers.reduce((m, a) => (a.at > m ? a.at : m), ""), answers_file: answers.length ? file : "",
+      saved_at: lastSaved(rec.key), processed_up_to: led ? led.up_to || "" : "",
+      new_since_processed: led ? answers.filter((a) => a.at > (led.up_to || "")).length : null,
+    });
+  }
+  const base = `hooman-status.${fileSafe(annotator())}`;
+  const json = { hooman_status: 1, updated_at: new Date().toISOString(), annotator: annotator(), app: APP_VERSION, columns: STATUS_COLS, decks: rows };
+  const cell = (v) => (v === null || v === undefined ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const csv = [STATUS_COLS.join(","), ...rows.map((r) => STATUS_COLS.map((c) => cell(r[c])).join(","))].join("\n") + "\n";
+  for (const [name, text] of [[`${base}.json`, JSON.stringify(json, null, 1)], [`${base}.csv`, csv]]) {
+    const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+    await w.write(new Blob([text], { type: name.endsWith(".csv") ? "text/csv" : "application/json" })); await w.close();
+  }
+}
+
 export async function start() {
   addEventListener("online", () => { refresh().then(flushAll); });
   document.addEventListener("visibilitychange", () => {          // leaving the app: save now, not in 4 s
     if (document.visibilityState === "hidden") for (const k of [...timers.keys()]) schedule(k, true);
   });
   if (!anyOn()) return;
+  statusSoon();
   if (isOn("drive")) drive.warmUp();                            // so a "Reconnect" tap can open Google's sign-in at once
   await refresh();
   return flushAll();
