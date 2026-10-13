@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 from playwright.sync_api import sync_playwright, expect
 
-from e2e import OUT, ROOT, serve, check, failures, import_example, dismiss_tour, count
+from e2e import OUT, ROOT, serve, check, failures, import_example, dismiss_tour, count, tap_add
 from e2e_v3 import phone, watch, export
 
 SCHEMA = json.loads((ROOT / "app" / "deck.schema.json").read_text(encoding="utf-8"))
@@ -115,7 +115,7 @@ def main():
         (OUT / "big.jpg").write_bytes(photo(3000, 2000, "JPEG", 1))
         (OUT / "small.png").write_bytes(photo(300, 200, "PNG", 2))
         (OUT / "mid.webp").write_bytes(photo(800, 800, "WEBP", 3))
-        page.get_by_role("button", name="📷 New deck from photos").click()
+        tap_add(page, "photos")
         page.locator("#ph-files").set_input_files([str(OUT / "big.jpg"), str(OUT / "small.png"), str(OUT / "mid.webp")])
         check(page.locator("#ph-count").inner_text() == "3 photos", "three photos picked")
         page.locator("#ph-title").fill("Lab photos"); page.locator("#ph-q").fill("Is the sample clean?")
@@ -143,7 +143,7 @@ def main():
         print("shared decks re-import and follow the schema")
         for title, key in [("Model A vs model B", "example-duel"), ("Follow the cells", "example-follow"), ("Mask the fruit", "example-fruit"), ("Follow a track", "example-timelapse")]:
             page.goto(base + "#/"); page.wait_for_selector(".hero")
-            page.get_by_role("button", name="Try an example").click()
+            tap_add(page, "examples")
             page.locator(".example", has_text=title).click()
             expect(page.locator(".sheet h3")).to_contain_text(re.compile("Ready|already here"), timeout=20000)
             page.keyboard.press("Escape")
@@ -169,7 +169,7 @@ def main():
 
         print("decks from links: QR code, and Drive links without Google set up")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
-        page.get_by_role("button", name="From a link").click()
+        tap_add(page, "link")
         page.locator("#link-url").fill(base + "examples/circles.hooman.zip")
         page.locator(".sheet").get_by_role("button", name="Import", exact=True).click()
         expect(page.locator(".sheet h3")).to_contain_text(re.compile("Ready|already here"), timeout=20000)
@@ -187,7 +187,7 @@ def main():
         check(decoded == link, f"the QR code reads back as the link ({decoded[:60]}…)")
         page.keyboard.press("Escape")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
-        page.get_by_role("button", name="From a link").click()
+        tap_add(page, "link")
         page.locator("#link-url").fill("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view?usp=sharing")
         page.locator(".sheet").get_by_role("button", name="Import", exact=True).click(); page.wait_for_selector(".errors li")
         check("Google Drive links" in page.locator(".errors").inner_text(), "a Drive link without Google set up explains what to do")
@@ -200,9 +200,10 @@ def main():
         fake.add("deck-circles", "circles.hooman.zip", (ROOT / "app" / "examples" / "circles.hooman.zip").read_bytes())
         g1 = google_context(browser, fake); q = g1.new_page(); watch(q, errors)
         q.goto(base); q.wait_for_selector(".hero")
-        check(q.locator("[data-act=drive]").count() == 1, "the Drive button appears once Google is set up")
+        q.locator("main [data-act=add]").first.click(); q.wait_for_selector(".sheet .add-menu")
+        check(q.locator(".sheet [data-act=drive]").count() == 1, "the Drive button appears once Google is set up (in + Add a deck)")
         q.evaluate("window.__pickDocs = [{ id: 'deck-circles', name: 'circles.hooman.zip' }]")
-        q.locator("[data-act=drive]").click()
+        q.locator(".sheet [data-act=drive]").click()
         expect(q.locator(".sheet h3")).to_contain_text("Ready", timeout=20000)
         q.get_by_role("button", name="Open the deck").click(); q.wait_for_selector(".card canvas"); dismiss_tour(q, "Dekel")
         check(count(q).endswith("/ 12"), "Open from Google Drive imports the picked deck")

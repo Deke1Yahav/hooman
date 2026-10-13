@@ -34,8 +34,16 @@ def banner(page):
     return (b.inner_text(), page.locator("#install-slot [data-act=install]").inner_text()) if b.count() else None
 
 
+def help_item(page, sel):
+    """Open Help (the footer's one link since 0.11) and return the item."""
+    page.locator("main [data-act=help]").click(); page.wait_for_selector(".sheet h3")
+    return page.locator(f".sheet {sel}")
+
+
 def foot_link(page):
-    return page.locator(".foot-note [data-act=install]").count() == 1
+    has = help_item(page, "[data-act=install]").count() == 1
+    page.keyboard.press("Escape"); page.wait_for_timeout(250)
+    return has
 
 
 def stored(page):
@@ -76,7 +84,7 @@ def main():
         check(banner(page) is None, "after a reload the banner stays hidden")
         check(settings_has_install(page), "settings still offers \"Install the app\" (in case it was a mistake)")
         check(foot_link(page), "so does the footer, next to the deck format")
-        page.locator(".foot-note [data-act=install]").click(); page.wait_for_selector(".sheet h3")
+        help_item(page, "[data-act=install]").click(); page.wait_for_timeout(300); page.wait_for_selector(".sheet h3")
         check("Install the app" in page.locator(".sheet h3").inner_text(), "the footer link opens the steps")
         page.keyboard.press("Escape"); page.wait_for_timeout(250)
 
@@ -149,7 +157,7 @@ def main():
         print("Drive guide")
         ctx = phone(browser, user_agent=ANDROID); page = ctx.new_page(); watch(page, errors)
         page.goto(base); page.wait_for_selector(".hero")
-        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        help_item(page, "[data-guide]").click(); page.wait_for_timeout(300); page.wait_for_selector(".sheet h3")
         g = page.locator(".sheet").inner_text().lower()          # section titles are upper-case in CSS
         check("open a deck from a drive" in g and "save answers or a backup" in g and "work as a team" in g and "☰" in g and "save to drive" in g,
               "the footer's Drive guide: open from a drive, save to a drive, work as a team (Android words)")
@@ -171,7 +179,7 @@ def main():
 
         ctx = phone(browser, user_agent=IPHONE); page = ctx.new_page(); watch(page, errors)
         page.goto(base); page.wait_for_selector(".hero")
-        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        help_item(page, "[data-guide]").click(); page.wait_for_timeout(300); page.wait_for_selector(".sheet h3")
         g = page.locator(".sheet").inner_text()
         check("Browse" in g and "iCloud Drive" in g and "Save to Files" in g, "on iPhone the guide uses iPhone words (Browse, iCloud Drive, Save to Files)")
         ctx.close()
@@ -184,7 +192,7 @@ def main():
         ctx.route("https://apis.google.com/**", lambda r: r.fulfill(status=200, content_type="text/javascript", body=""))
         page = ctx.new_page(); watch(page, errors)
         page.goto(base); page.wait_for_selector(".hero")
-        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        help_item(page, "[data-guide]").click(); page.wait_for_timeout(300); page.wait_for_selector(".sheet h3")
         g = page.locator(".sheet").inner_text().lower()
         check("built in: google drive" in g and "open from google drive" in g and "team folder" in g and "any drive app" in g,
               "with Google ids: the built-in Drive features come first, then any drive app")
@@ -194,8 +202,8 @@ def main():
         print("Video guide")
         ctx = phone(browser, user_agent=ANDROID); page = ctx.new_page(); watch(page, errors)
         page.goto(base); page.wait_for_selector(".hero")
-        check(page.locator(".empty [data-videos]").count() == 1, "an empty home screen points newcomers to the video guide")
-        page.locator(".foot-note [data-videos]").click(); page.wait_for_selector(".sheet h3")
+        check(page.locator(".start [data-videos]").count() == 1, "an empty home screen points newcomers to the video guide")
+        help_item(page, "[data-videos]").click(); page.wait_for_timeout(300); page.wait_for_selector(".sheet h3")
         link = page.locator(".sheet a.video-link").first
         check(page.locator(".sheet h3").inner_text().endswith("Video guide") and link.get_attribute("href") == "https://youtu.be/PI-3ms1sx_E"
               and link.get_attribute("target") == "_blank" and "Part 1" in link.inner_text(), "the footer's Video guide lists Part 1 on YouTube, opening outside the app")
@@ -216,7 +224,7 @@ def main():
             r = page.locator("#install-slot .banner").bounding_box()
             check(fits and r and r["x"] >= 0 and r["x"] + r["width"] <= w, f"{w}x{h}: the banner fits, no sideways scroll")
             lines = page.evaluate("(() => { const f = document.querySelector('.foot-note'); return Math.round(f.getBoundingClientRect().height / parseFloat(getComputedStyle(f).lineHeight)); })()")
-            check(lines <= 4, f"{w}x{h}: the footer stays on 4 short lines ({lines})")
+            check(lines <= 2, f"{w}x{h}: the footer is one short line ({lines})")
             page.screenshot(path=OUT / f"64_install_{w}x{h}.png", full_page=True)
             ctx.close()
 

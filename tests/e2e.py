@@ -51,8 +51,17 @@ def png1(w=8, h=8):
     b = io.BytesIO(); Image.new("L", (w, h)).save(b, "PNG"); return b.getvalue()
 
 
+def tap_add(page, act):
+    """A way to add a deck: on the home screen for a newcomer, otherwise in the "+ Add a deck" sheet (0.11)."""
+    b = page.locator(f"main [data-act={act}]")
+    if not b.count() or not b.first.is_visible():
+        page.locator("main [data-act=add]").first.click(); page.wait_for_selector(".sheet .add-menu")
+        b = page.locator(f".sheet [data-act={act}]")
+    b.first.click()
+
+
 def import_example(page, title, wait_card=True):
-    page.get_by_role("button", name="Try an example").click()
+    tap_add(page, "examples")
     page.locator(".example", has_text=title).click()
     expect(page.locator(".sheet h3")).to_contain_text("Ready", timeout=20000)
     page.get_by_role("button", name="Open the deck").click()
@@ -253,7 +262,7 @@ def main():
 
         print("annotate deck: the editor opens on every card")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
-        page.get_by_role("button", name="Try an example").click()
+        tap_add(page, "examples")
         page.locator(".example", has_text="Mask the fruit").click()
         expect(page.locator(".sheet h3")).to_contain_text("Ready", timeout=20000)
         page.get_by_role("button", name="Open the deck").click()
@@ -298,7 +307,7 @@ def main():
         print("same id again: update keeps answers")
         page.goto(base + "#/")
         page.wait_for_selector(".hero")
-        page.get_by_role("button", name="Try an example").click()
+        tap_add(page, "examples")
         page.locator(".example", has_text="Follow a track").click()
         expect(page.locator(".sheet h3")).to_contain_text("already here", timeout=20000)
         page.get_by_role("button", name="Update it, keep the answers").click()
@@ -394,7 +403,7 @@ def main():
         n_model = len(np.unique(model)) - 1
 
         page.goto(base + "#/"); page.wait_for_selector(".hero")
-        page.get_by_role("button", name="Try an example").click()
+        tap_add(page, "examples")
         page.locator(".example", has_text="Fix the nuclei").click()
         expect(page.locator(".sheet h3")).to_contain_text("Ready", timeout=20000)
         page.get_by_role("button", name="Open the deck").click()

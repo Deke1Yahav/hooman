@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 from playwright.sync_api import sync_playwright
 
-from e2e import OUT, serve, check, failures, dismiss_tour
+from e2e import OUT, serve, check, failures, dismiss_tour, tap_add
 from e2e_v3 import phone, watch
 
 N, BROKEN = 400, 350
@@ -142,8 +142,8 @@ def main():
         wait_done(page, "big-2")
         page.evaluate(UNSAVE, "big-2")            # as if the app had closed before the copy was saved
         page.goto(base + "#/"); page.reload(); page.wait_for_selector(".hero")
-        banner = page.locator(".banner", has_text="wasn't fully saved")
-        check(banner.count() == 1 and "needs its zip again" in page.locator(".deckrow", has_text="big-2").inner_text(), "home says which deck still needs its zip")
+        row = page.locator(".deckrow", has_text="big-2")
+        check(row.count() == 1 and "Not fully on the phone" in row.inner_text() and "pick its zip again" in row.inner_text(), "its row says the deck still needs its zip")
         page.screenshot(path=OUT / "83_lazy_restart_home.png")
         page.goto(base + "#/deck/big-2?card=c390"); page.wait_for_selector(".card-note")
         check("isn't on the phone yet" in page.locator(".card-note").inner_text(), "a card that isn't on the phone asks for the zip again")
@@ -167,7 +167,7 @@ def main():
 
         print("Small decks are unchanged")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
-        page.get_by_role("button", name="Try an example").click(); page.locator(".example", has_text="Is it a circle?").click()
+        tap_add(page, "examples"); page.locator(".example", has_text="Is it a circle?").click()
         page.locator(".sheet h3", has_text="Ready").wait_for(timeout=20000)
         check("Start now" not in page.locator(".sheet").inner_text(), "a small deck imports whole, as before")
         ctx.close()

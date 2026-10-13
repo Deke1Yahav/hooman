@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 from playwright.sync_api import sync_playwright, expect
 
-from e2e import OUT, ROOT, serve, check, failures, bad_zip, png1, import_example, dismiss_tour, count
+from e2e import OUT, ROOT, serve, check, failures, bad_zip, png1, import_example, dismiss_tour, count, tap_add
 
 
 def phone(browser, **kw):
@@ -97,7 +97,7 @@ def main():
 
         print("follow mode: tap the cell frame after frame, through a division")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
-        page.get_by_role("button", name="Try an example").click()
+        tap_add(page, "examples")
         page.locator(".example", has_text="Follow the cells").click()
         expect(page.locator(".sheet h3")).to_contain_text("Ready", timeout=20000)
         page.get_by_role("button", name="Open the deck").click()
@@ -309,7 +309,7 @@ def main():
 
         ctx7 = phone(browser); ctx7.add_init_script("navigator.storage.estimate = async () => ({ quota: 200000, usage: 0 });")
         p7 = ctx7.new_page(); p7.goto(base); p7.wait_for_selector(".hero")
-        p7.get_by_role("button", name="Try an example").click()
+        tap_add(p7, "examples")
         p7.locator(".example", has_text="Model A vs model B").click()
         p7.wait_for_selector(".errors li", timeout=20000)
         check("needs about" in p7.locator(".sheet").inner_text(), "the importer refuses a deck that won't fit in the free storage")

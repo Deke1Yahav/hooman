@@ -170,7 +170,8 @@ def main():
 
         print("The Drive guide points to live save")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
-        page.locator(".foot-note [data-guide]").click(); page.wait_for_selector(".sheet h3")
+        page.locator("main [data-act=help]").click(); page.wait_for_selector(".sheet h3")
+        page.locator(".sheet [data-guide]").click(); page.wait_for_timeout(300); page.wait_for_selector(".sheet h3")
         g = page.locator(".sheet").inner_text().lower()
         check("save automatically" in g and "live save" in g and "syncs" in g, "the guide's \"Save automatically\" section names live save and synced folders")
         page.keyboard.press("Escape"); page.wait_for_timeout(300)
