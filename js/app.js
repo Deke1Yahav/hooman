@@ -196,7 +196,9 @@ function folderLine() {
   if (s.status === "checking") return `<div class="folder-line busy"><span>📂 ${esc(s.msg || `Checking “${name}”…`)}</span><button class="btn quiet" data-act="stopcheck">Stop</button></div>`;
   if (s.status === "paused") return `<button class="folder-line warn" data-act="checkdecks"><span>📂 “${esc(name)}” needs a tap to be read again</span><b>Reconnect</b></button>`;
   const n = s.found, errs = s.errors.length;
-  return `<button class="folder-line" data-act="checkdecks" aria-label="Check the decks folder now"><span>📂 ${esc(name)}${s.at ? ` · ${n} deck${n === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : " · tap to check"}</span><b aria-hidden="true">↻</b></button>
+  // fail: Drive didn't answer (the decks on the phone are fine); errs: zips that aren't decks (an AI can fix those)
+  return `${s.fail ? `<button class="folder-line warn" data-act="checkdecks" aria-label="Try the decks folder again"><span>📂 ${esc(name)} · Google Drive didn't answer${s.failAt ? ` at ${hhmm(s.failAt)}` : ""} · tap to try again</span><b aria-hidden="true">↻</b></button>`
+    : `<button class="folder-line" data-act="checkdecks" aria-label="Check the decks folder now"><span>📂 ${esc(name)}${s.at ? ` · ${n} deck${n === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : " · tap to check"}</span><b aria-hidden="true">↻</b></button>`}
     ${errs ? `<button class="link-btn folder-errs" data-act="folderrors">${errs} zip${errs > 1 ? "s" : ""} in the folder couldn't be opened: see why</button>` : ""}`;
 }
 
@@ -352,7 +354,7 @@ async function importFile(f) {
 async function runRestore(fn) {
   const sh = openSheet(`<h3>Restoring…</h3><p>Merging the answers into this device. Newer answers win.</p>`, { dismissable: false });
   let r;
-  try { r = await fn(); } catch (e) { sh.close(); return showErrors(e.errors || [e.message], []); }
+  try { r = await fn(); } catch (e) { sh.close(); return showErrors(e.errors || [e.message], [], { deck: false, title: "This file can't be restored" }); }
   sh.el.innerHTML = `<h3>Restored</h3>
     ${r.decks.map((d) => `<p><b style="color:var(--text)">${esc(d.title)}</b>${d.created ? " (added to this device)" : ""}: ${d.added} new answer${d.added === 1 ? "" : "s"}, ${d.newer} newer than this device's, ${d.history} history lines, ${d.notes} notes.</p>`).join("") || "<p>Nothing to restore.</p>"}
     ${r.missing.length ? `<p style="color:var(--yellow)">Not restored: ${r.missing.map(esc).join(", ")}. That deck isn't on this device and the file has no images. Import the deck first, then restore again.</p>` : ""}
@@ -372,7 +374,7 @@ async function backupNow(images) {
     sh.close();
     const r = await shareOrDownload(b.zip, `hooman-backup-${new Date().toISOString().slice(0, 10)}${images ? "-full" : ""}.zip`);
     if (r !== "cancelled") { markBackup(); toast(`Backed up ${b.answers} answers from ${b.decks} deck${b.decks === 1 ? "" : "s"}`); if (parseHash().page === "home") home(); }
-  } catch (e) { sh.close(); showErrors([`Backup failed: ${e.message}`], []); }
+  } catch (e) { sh.close(); showErrors([e.message], [], { deck: false, title: "The backup failed" }); }
 }
 
 // ---------------------------------------------------------------- big decks that are still loading (loading.js)
@@ -405,6 +407,7 @@ function decksRow() {
   const computer = !(isIOS() || isAndroid());
   if (!on) return `<div class="live-row"><div><b>📂 Decks folder</b><span>Off. Pick a folder once: every deck zip you put in it shows up here by itself${computer ? ". A Google Drive, OneDrive or Dropbox folder on this computer works too" : ""}.</span></div><button class="btn" data-decks="on">Choose a folder</button></div>`;
   const line = s.status === "paused" ? `Paused. ${s.msg || "Tap Reconnect."}` : s.status === "checking" ? (s.msg || "Checking…")
+    : s.fail ? `Folder “${name}” · couldn't read it${s.failAt ? ` at ${hhmm(s.failAt)}` : ""}: ${s.fail}`
     : `Folder “${name}”${s.at ? ` · ${s.found} deck zip${s.found === 1 ? "" : "s"} · checked ${hhmm(s.at)}` : ""}${s.timing ? ` · took ${secs(s.timing.total)} (folders ${secs(s.timing.list)} · file info ${secs(s.timing.info)} · reading ${secs(s.timing.reading)})` : ""}`;
   const resultsHere = live.status().folder.status !== "off" && live.folderName() === "results";
   return `<div class="live-row"><div><b>📂 Decks folder</b><span>${esc(line)}${s.note ? `<br>${esc(s.note)}` : ""}</span></div>
@@ -422,18 +425,22 @@ async function decksAction(what) {
     }
     else if (what === "stop") dfolder.stop();
     else if (what === "check") { await dfolder.check({ force: true, openKey: S && S.key }); decksNothingNew(); }
-    else if (what === "errors") {
-      const e = dfolder.status().errors;
-      return showErrors(e.flatMap((x) => x.errors.map((m) => `${x.name}: ${m}`)), []);
-    }
+    else if (what === "errors") return folderZipErrors();
     else if (what === "results") { await live.useFolder(await dfolder.resultsFolder()); toast("Your answers now go into “results” in the decks folder"); }
   } catch (err) {
     if (err && err.name === "AbortError") toast("No folder was chosen");
-    else showErrors([`The decks folder: ${(err && err.message) || String(err)}`], []);
+    else showErrors([(err && err.message) || String(err)], [], { deck: false, title: "The decks folder" });
   }
+}
+// Zips in the decks folder that aren't decks (name: given, only that one's).
+function folderZipErrors(name) {
+  const e = dfolder.status().errors.filter((x) => !name || x.name === name);
+  if (e.length) showErrors(e.flatMap((x) => x.errors.map((m) => `${x.name}: ${m}`)), [], { title: e.length > 1 ? `${e.length} zips in the folder can't be opened yet` : "" });
+  return e.length;
 }
 function decksNothingNew() {
   const s = dfolder.status(), n = s.errors.length;
+  if (s.status === "ok" && s.fail) return toast(s.fail, 6000);
   if (s.status !== "ok" || s.added.length || s.updated.length) return;
   const wait = s.available.length;
   const why = !s.found ? `no deck zips (*.hooman.zip) there${s.skipped ? `; ${s.skipped} answers file${s.skipped > 1 ? "s are" : " is"} results, not decks` : ""}`
@@ -444,7 +451,11 @@ const secs = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
 // "Tap to load" a deck waiting in the decks folder (or finish one that wasn't fully saved), then open it.
 async function loadZip(name, finish = false) {
   const key = await dfolder.load(name, S ? S.key : null);
-  if (!key) { const e = dfolder.status().errors; if (e.length) showErrors(e.flatMap((x) => x.errors.map((m) => `${x.name}: ${m}`)), []); return; }
+  if (!key) {
+    const s = dfolder.status();
+    if (!folderZipErrors(name) && s.fail) showErrors([s.fail], [], { deck: false, title: "Couldn't get the deck from the folder" });
+    return;
+  }
   if (finish) { toast("Saving the rest of the deck on the phone…", 3000); if (S && S.key === key) return showCard(); }
   go(`#/deck/${encodeURIComponent(key)}`);
 }
@@ -475,7 +486,7 @@ async function liveAction(what, t) {
     if (what === "on") { await live.enable(t); toast(t === "drive" ? "Live save to Google Drive is on" : `Live save to “${live.folderName()}” is on`); }
     else if (what === "off") { await live.disable(t); toast("Live save is off"); }
     else await live.reconnect(t);
-  } catch (err) { if (err && err.name !== "AbortError") showErrors([err.message || String(err)], []); }
+  } catch (err) { if (err && err.name !== "AbortError") showErrors([err.message || String(err)], [], { deck: false, title: "Live save" }); }
 }
 function liveMark() {
   const el = $("#live-mark");
@@ -553,7 +564,7 @@ async function runImport(getter) {
     });
   } catch (e) {
     if (!e.errors) console.error(e);           // deck problems are shown to the hooman, not logged
-    return showErrors(e.errors || [e.message || String(e)], e.warnings || []);
+    return showErrors(e.errors || [e.message || String(e)], e.warnings || [], { deck: !!e.errors && !e.io, title: e.io ? "Couldn't read the file" : "" });
   }
   const existing = await store.getDeck(imported.deck.id);
   if (!existing) return finishImport(imported, "new");
@@ -585,7 +596,7 @@ async function finishImport(imported, mode, existing) {
   try { rec = await saveDeck(imported, mode, existing); }
   catch (e) {
     sh.close();
-    return showErrors(e.errors || [`Could not save the deck on this device: ${e.message}. The phone may be out of storage.`], []);
+    return showErrors(e.errors || [`${e.message}. The phone may be out of storage.`], [], { deck: false, title: "Couldn't save the deck on this device" });
   }
   const w = imported.warnings;
   sh.el.innerHTML = `<h3>Ready: ${esc(rec.title)}</h3>
@@ -602,18 +613,20 @@ async function finishImport(imported, mode, existing) {
   if (!S && parseHash().page === "home") home();
 }
 
-function showErrors(errors, warnings) {
+// deck: problems in a deck, which the AI that made it can fix ("Copy for the AI"). Otherwise (a folder, Drive, the
+// phone, a backup) nothing in a deck needs fixing: its own title, and a plain copy of the message.
+function showErrors(errors, warnings, { deck = true, title = "" } = {}) {
   const shown = errors.slice(0, 30), more = errors.length - shown.length;
   const text = errors.join("\n");
-  const sh = openSheet(`<h3>This deck can't be opened yet</h3>
-    <p>${errors.length} problem${errors.length > 1 ? "s" : ""}. If an AI made the deck, paste these into that chat. It can fix them.</p>
+  const sh = openSheet(`<h3>${esc(title || (deck ? "This deck can't be opened yet" : "That didn't work"))}</h3>
+    ${deck ? `<p>${errors.length} problem${errors.length > 1 ? "s" : ""}. If an AI made the deck, paste these into that chat. It can fix them.</p>` : ""}
     <ul class="errors">${shown.map((x) => `<li>${esc(x)}</li>`).join("")}${more > 0 ? `<li>…and ${more} more (all included when you copy)</li>` : ""}</ul>
     ${warnings.length ? `<details><summary>${warnings.length} warning${warnings.length > 1 ? "s" : ""}</summary><ul class="errors warn">${warnings.slice(0, 20).map((x) => `<li>${esc(x)}</li>`).join("")}</ul></details>` : ""}
-    <div class="row"><button class="btn" data-copy>Copy for the AI</button><button class="btn quiet" data-close>Close</button></div>`);
+    <div class="row"><button class="btn" data-copy>${deck ? "Copy for the AI" : "Copy the message"}</button><button class="btn quiet" data-close>Close</button></div>`);
   sh.el.onclick = async (e) => {
     if (e.target.closest("[data-copy]")) {
-      const msg = `The Hooman in the Loop app rejected the deck with these errors. Please fix the deck and give me the new zip:\n\n${text}${warnings.length ? `\n\nWarnings:\n${warnings.join("\n")}` : ""}`;
-      if (await copyText(msg)) toast("Copied. Paste it into your AI chat");
+      const msg = !deck ? text : `The Hooman in the Loop app rejected the deck with these errors. Please fix the deck and give me the new zip:\n\n${text}${warnings.length ? `\n\nWarnings:\n${warnings.join("\n")}` : ""}`;
+      if (await copyText(msg)) toast(deck ? "Copied. Paste it into your AI chat" : "Copied");
     }
     if (e.target.closest("[data-close]")) sh.close();
   };
@@ -1632,7 +1645,7 @@ async function shareDeckSheet(key) {
         out.innerHTML = `<div class="section-title">Link to this deck</div>${linkBlock(link)}`;
         wireLink(out, link, rec.title);
       }
-    } catch (err) { showErrors([`Sharing failed: ${err.message}`], []); }
+    } catch (err) { showErrors([err.message], [], { deck: false, title: "Sharing failed" }); }
     t.disabled = false;
   });
 }
@@ -1643,7 +1656,7 @@ async function openFromDrive() {
     if (!picked.length) return;
     toast("Downloading from Google Drive…", 4000);
     importFile(await drive.download(picked[0].id, picked[0].name));
-  } catch (e) { showErrors([e.message], []); }
+  } catch (e) { showErrors([e.message], [], { deck: false, title: "Google Drive" }); }
 }
 
 async function teamSheet(key) {
@@ -1678,7 +1691,7 @@ async function teamSheet(key) {
         rec.drive = { ...d, deckFileId: f.id }; await store.putDeck(rec);
         toast("The deck is in the team folder", 3000);
       }
-    } catch (err) { showErrors([err.message], []); }
+    } catch (err) { showErrors([err.message], [], { deck: false, title: "Google Drive" }); }
     t.disabled = false;
   });
 }
@@ -1737,7 +1750,7 @@ function photosSheet() {
       }, (i, n) => { t.textContent = `Preparing photo ${i + 1} of ${n}…`; });
       sh.close();
       finishImport(imported, "new");
-    } catch (err) { t.disabled = false; t.textContent = "Make the deck"; showErrors(err.errors || [err.message], []); }
+    } catch (err) { t.disabled = false; t.textContent = "Make the deck"; showErrors(err.errors || [err.message], [], { deck: false }); }
   });
 }
 
