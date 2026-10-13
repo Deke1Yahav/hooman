@@ -7,6 +7,7 @@ import { normalizeDeck } from "./deck.js";
 import * as store from "./store.js";
 import { driveFileId } from "./share.js";
 import { googleReady, downloadPublic } from "./drive.js";
+import { startLoading, pendingIds, forgetLoading } from "./loading.js";
 
 const isURL = (p) => /^https?:\/\//i.test(p);
 const q = (s) => JSON.stringify(s);
@@ -43,70 +44,126 @@ async function pool(items, n, fn) {
   await Promise.all(workers);
 }
 
-// source: {kind: "zip"|"web", name, get(path) -> Promise<Blob>, has, list}
+// Decks with more image files than this open at once: the first cards are checked now, the rest load in the
+// background while the hooman works (loading.js). Smaller decks are checked and stored whole, as before.
+const LAZY_FILES = 300, FIRST_CARDS = 8;
+export const cardPaths = (card) => [...new Set([...card.frames.flatMap((f) => [f.path, ...(f.channels || [])]),
+  ...card.overlays.filter((o) => o.shape === "mask").map((o) => o.mask)])];
+
+// One image: its bytes (typed) and size. Throws a hooman-readable message when it isn't a usable image.
+async function readImage(source, path) {
+  let blob = isURL(path) ? await fetchBlob(path) : await source.get(path);
+  let sz = imageSize(new Uint8Array(await blob.slice(0, 65536).arrayBuffer()));         // sizes sit at the start
+  if ((!sz || (sz.type === "jpeg" && !sz.w)) && blob.size > 65536) sz = imageSize(new Uint8Array(await blob.slice(0, 1 << 20).arrayBuffer()));
+  if (!sz) throw new Error(`${q(path)} is not a JPEG, PNG, WebP or GIF image`);
+  if (sz.type === "tiff") throw new Error(`${q(path)} is a TIFF; phones can't show TIFF. Convert it to PNG (llms.txt recipe 7.4)`);
+  if (!IMAGE_TYPES.includes(sz.type)) throw new Error(`${q(path)} has an unsupported image type`);
+  if (!blob.type || blob.type === "application/octet-stream") blob = new Blob([blob], { type: `image/${sz.type}` });
+  return { blob, sz };
+}
+
+// Per-card geometry: frames share a size, masks match it, shapes fall inside it. Sets card.w / card.h.
+// Returns true for a very big image.
+function checkCard(card, i, sizes, errs, warnings) {
+  const where = `cards[${i}] (id ${q(card.id)})`;
+  const s0 = sizes.get(card.frames[0].path);
+  card.w = s0.w; card.h = s0.h;
+  if (s0.type === "jpeg" && !s0.w) { errs.push(`${where}: could not read the size of ${q(card.frames[0].path)}; re-save it as a normal JPEG or PNG`); return false; }
+  card.frames.forEach((f, j) => {
+    const s = sizes.get(f.path);
+    if (j && (s.w !== s0.w || s.h !== s0.h)) errs.push(`${where}: frames[${j}] ${q(f.path)} is ${s.w}×${s.h} but frames[0] is ${s0.w}×${s0.h}; all frames must be the same size`);
+    (f.channels || []).slice(1).forEach((p) => {
+      const sc = sizes.get(p);
+      if (sc && (sc.w !== s.w || sc.h !== s.h)) errs.push(`${where}${card.frames.length > 1 ? ` frames[${j}]` : ""}: channel image ${q(p)} is ${sc.w}×${sc.h} but its "image" is ${s.w}×${s.h}; every channel must be the same size`);
+    });
+  });
+  const out = (x, y) => x < -0.05 * s0.w || y < -0.05 * s0.h || x > 1.05 * s0.w || y > 1.05 * s0.h;
+  card.overlays.forEach((o, j) => {
+    const ow = `${where} overlays[${j}]`;
+    if (o.shape === "mask") {
+      const s = sizes.get(o.mask);
+      if (s.type !== "png") errs.push(`${ow}: mask ${q(o.mask)} must be a PNG (it is ${s.type.toUpperCase()})`);
+      else if (s.w !== s0.w || s.h !== s0.h) errs.push(`${ow}: mask ${q(o.mask)} is ${s.w}×${s.h} but the image is ${s0.w}×${s0.h}; a mask must be exactly the image size`);
+    } else if (o.shape === "box") {
+      const [x, y, w, h] = o.box;
+      if (out(x, y) || out(x + w, y + h)) warnings.push(`${ow}: box ${q(o.box)} is outside the ${s0.w}×${s0.h} image; boxes are [x, y, w, h] in pixels`);
+    } else if (o.shape === "point") {
+      if (out(...o.point)) warnings.push(`${ow}: point ${q(o.point)} is outside the ${s0.w}×${s0.h} image`);
+    } else if (o.polygon.some((p) => out(...p))) warnings.push(`${ow}: polygon goes outside the ${s0.w}×${s0.h} image; points are [x, y] in pixels`);
+  });
+  if (card.focus) {
+    const [x, y, w, h] = card.focus;
+    if (out(x, y) || out(x + w, y + h)) warnings.push(`${where}: focus ${q(card.focus)} is outside the ${s0.w}×${s0.h} image`);
+  }
+  return Math.max(s0.w, s0.h) > 4096;
+}
+
+// source: {kind: "zip"|"web", name, get(path) -> Promise<Blob>, has, list, size?}
 async function load(source, rawText, onProgress) {
   const raw = parseJSON(rawText);
   const { deck, errors, warnings, paths } = normalizeDeck(raw, source, source.name);
   if (!deck) throw new ImportError(errors, warnings);
-  const list = [...paths], blobs = new Map(), sizes = new Map(), errs = [];
+  const list = [...paths], lazy = source.kind === "zip" && list.length > LAZY_FILES && deck.cards.length > FIRST_CARDS;
+  const now = lazy ? deck.cards.slice(0, FIRST_CARDS) : deck.cards;
+  const inCards = new Set(deck.cards.flatMap(cardPaths));
+  const read = lazy ? [...new Set([...now.flatMap(cardPaths), ...list.filter((p) => !inCards.has(p))])] : list;
+  const blobs = new Map(), sizes = new Map(), errs = [];
   let n = 0;
-  onProgress && onProgress(0, list.length);
-  await pool(list, source.kind === "web" ? 6 : 4, async (path) => {
-    try {
-      let blob = isURL(path) ? await fetchBlob(path) : await source.get(path);
-      const head = new Uint8Array(await blob.slice(0, 262144).arrayBuffer());
-      const sz = imageSize(head);
-      if (!sz) throw new Error(`${q(path)} is not a JPEG, PNG, WebP or GIF image`);
-      if (sz.type === "tiff") throw new Error(`${q(path)} is a TIFF; phones can't show TIFF. Convert it to PNG (llms.txt recipe 7.4)`);
-      if (!IMAGE_TYPES.includes(sz.type)) throw new Error(`${q(path)} has an unsupported image type`);
-      if (!blob.type || blob.type === "application/octet-stream") blob = new Blob([blob], { type: `image/${sz.type}` });
-      blobs.set(path, blob); sizes.set(path, sz);
-    } catch (e) { errs.push(e.message); }
-    onProgress && onProgress(++n, list.length);
+  onProgress && onProgress(0, read.length);
+  await pool(read, source.kind === "web" ? 6 : 4, async (path) => {
+    try { const r = await readImage(source, path); blobs.set(path, r.blob); sizes.set(path, r.sz); }
+    catch (e) { errs.push(e.message); }
+    onProgress && onProgress(++n, read.length);
   });
   if (errs.length) throw new ImportError(errs, warnings);
-
-  // per-card geometry checks: frames share a size, masks match it, shapes fall inside it
   let big = 0;
-  deck.cards.forEach((card, i) => {
-    const where = `cards[${i}] (id ${q(card.id)})`;
-    const s0 = sizes.get(card.frames[0].path);
-    card.w = s0.w; card.h = s0.h;
-    if (s0.type === "jpeg" && !s0.w) { errs.push(`${where}: could not read the size of ${q(card.frames[0].path)}; re-save it as a normal JPEG or PNG`); return; }
-    if (Math.max(s0.w, s0.h) > 4096) big++;
-    card.frames.forEach((f, j) => {
-      const s = sizes.get(f.path);
-      if (j && (s.w !== s0.w || s.h !== s0.h)) errs.push(`${where}: frames[${j}] ${q(f.path)} is ${s.w}×${s.h} but frames[0] is ${s0.w}×${s0.h}; all frames must be the same size`);
-      (f.channels || []).slice(1).forEach((p, k) => {
-        const sc = sizes.get(p);
-        if (sc && (sc.w !== s.w || sc.h !== s.h)) errs.push(`${where}${card.frames.length > 1 ? ` frames[${j}]` : ""}: channel image ${q(p)} is ${sc.w}×${sc.h} but its "image" is ${s.w}×${s.h}; every channel must be the same size`);
-      });
-    });
-    const out = (x, y) => x < -0.05 * s0.w || y < -0.05 * s0.h || x > 1.05 * s0.w || y > 1.05 * s0.h;
-    card.overlays.forEach((o, j) => {
-      const ow = `${where} overlays[${j}]`;
-      if (o.shape === "mask") {
-        const s = sizes.get(o.mask);
-        if (s.type !== "png") errs.push(`${ow}: mask ${q(o.mask)} must be a PNG (it is ${s.type.toUpperCase()})`);
-        else if (s.w !== s0.w || s.h !== s0.h) errs.push(`${ow}: mask ${q(o.mask)} is ${s.w}×${s.h} but the image is ${s0.w}×${s0.h}; a mask must be exactly the image size`);
-      } else if (o.shape === "box") {
-        const [x, y, w, h] = o.box;
-        if (out(x, y) || out(x + w, y + h)) warnings.push(`${ow}: box ${q(o.box)} is outside the ${s0.w}×${s0.h} image; boxes are [x, y, w, h] in pixels`);
-      } else if (o.shape === "point") {
-        if (out(...o.point)) warnings.push(`${ow}: point ${q(o.point)} is outside the ${s0.w}×${s0.h} image`);
-      } else if (o.polygon.some((p) => out(...p))) warnings.push(`${ow}: polygon goes outside the ${s0.w}×${s0.h} image; points are [x, y] in pixels`);
-    });
-    if (card.focus) {
-      const [x, y, w, h] = card.focus;
-      if (out(x, y) || out(x + w, y + h)) warnings.push(`${where}: focus ${q(card.focus)} is outside the ${s0.w}×${s0.h} image`);
-    }
-  });
+  now.forEach((card, i) => { if (checkCard(card, i, sizes, errs, warnings)) big++; });
   if (big) warnings.push(`${big} card${big > 1 ? "s have images" : " has an image"} larger than 4096 px; phones may be slow (keep the long side at 2048 px or less)`);
-  const bytes = [...blobs.values()].reduce((s, b) => s + b.size, 0);
+  const bytes = lazy && source.size ? list.reduce((t, p) => t + (isURL(p) ? 0 : source.size(p)), 0) : [...blobs.values()].reduce((t, b) => t + b.size, 0);
   if (bytes > 150e6) warnings.push(`this deck is ${Math.round(bytes / 1e6)} MB; phones are happiest under about 100 MB per deck. Split big sets into parts (llms.txt section 1b)`);
   if (deck.cards.length > 2000) warnings.push(`this deck has ${deck.cards.length} cards; split it into parts of up to about 1000 (llms.txt section 1b)`);
   if (errs.length) throw new ImportError(errs, warnings);
-  return { deck, blobs, warnings, origin: source.name, bytes };
+  return { deck, blobs, warnings, origin: source.name, bytes, lazy: lazy ? { source, first: now.map((c) => c.id) } : null };
+}
+
+// The background reader for one card of a big deck: check it like the import does, then store its files.
+function cardReader(key, source, deck) {
+  const index = new Map(deck.cards.map((c, i) => [c.id, i])), byId = new Map(deck.cards.map((c) => [c.id, c]));
+  return async (id) => {
+    const card = byId.get(id), sizes = new Map(), files = [];
+    for (const p of cardPaths(card)) { const r = await readImage(source, p); sizes.set(p, r.sz); files.push({ path: p, blob: r.blob }); }
+    const errs = [];
+    checkCard(card, index.get(id), sizes, errs, []);
+    if (errs.length) return { broken: errs.join(" ") };
+    await store.putFiles(key, files);
+    return { w: card.w, h: card.h };
+  };
+}
+
+// For a card whose size isn't known: read it from its stored files (null if some file isn't stored).
+export async function storedCard(key, card) {
+  const sizes = new Map();
+  for (const p of cardPaths(card)) {
+    if (isURL(p)) return null;
+    const b = await store.getFile(key, p);
+    if (!b) return null;
+    const sz = imageSize(new Uint8Array(await b.slice(0, 1 << 20).arrayBuffer()));
+    if (!sz) return null;
+    sizes.set(p, sz);
+  }
+  const errs = [];
+  checkCard(card, 0, sizes, errs, []);
+  return errs.length ? { broken: errs.join(" ") } : { w: card.w, h: card.h };
+}
+
+// Start (or, after picking the zip again, finish) loading a big deck's remaining cards.
+export function loadInBackground(rec, source, skip = []) {
+  const order = rec.order || rec.deck.cards.map((c) => c.id), left = new Set(pendingIds(rec.key));
+  const skipped = new Set(skip);
+  const pending = left.size ? order.filter((id) => left.has(id)) : order.filter((id) => !skipped.has(id));
+  if (!pending.length) return 0;
+  startLoading(rec.key, { pending, total: rec.deck.cards.length, readCard: cardReader(rec.key, source, rec.deck) });
+  return pending.length;
 }
 
 function zipSource(files, name) {
@@ -128,6 +185,7 @@ function zipSource(files, name) {
     has: (p) => files.has(root + p),
     list: () => rel,
     get: (p) => files.get(root + p).blob(),
+    size: (p) => (files.get(root + p) || { size: 0 }).size,
     deckText: async () => (await files.get(root + "deck.json").blob()).text(),
   };
 }
@@ -198,7 +256,7 @@ export async function saveDeck(imported, mode, existing) {
   }
   const now = new Date().toISOString();
   await checkSpace(imported.bytes || 0, mode === "update" && existing ? existing.bytes || 0 : 0);
-  if (mode === "update") await store.clearFiles(deck.id);
+  if (mode === "update") { forgetLoading(deck.id); await store.clearFiles(deck.id); }
   await store.putFiles(deck.id, [...blobs].map(([path, blob]) => ({ path, blob })));
   const rec = {
     key: deck.id, deck, title: deck.title, origin, bytes: imported.bytes,
@@ -210,6 +268,7 @@ export async function saveDeck(imported, mode, existing) {
   };
   await store.putDeck(rec);
   store.askPersistent();
+  if (imported.lazy) rec.loadingLeft = loadInBackground(rec, imported.lazy.source, imported.lazy.first);
   return rec;
 }
 

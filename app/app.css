@@ -259,6 +259,11 @@ ul.steps { padding-left: 18px; }
 .live-row b { font-size: 14px; color: var(--text); }
 .live-row span { font-size: 12px; color: var(--muted); line-height: 1.35; }
 .live-row .btn { min-height: 38px; flex: none; padding: 0 12px; font-size: 13px; }
+.loadmark { background: transparent; border: 0; color: var(--focus); font: 500 11px var(--mono); padding: 2px 4px; flex: none; cursor: pointer; white-space: nowrap; }
+.loadnote { color: var(--focus); font-weight: 500; }
+.card-note { margin: auto; max-width: 420px; padding: 24px 18px; text-align: center; color: var(--muted); line-height: 1.45; }
+.card-note b { display: block; color: var(--text); font-size: 17px; margin-bottom: 8px; }
+.card-note .row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
 .live-mark { background: transparent; border: 1px solid var(--line); border-radius: 10px; color: var(--green); font: 500 12px var(--mono); padding: 4px 6px; flex: none; cursor: pointer; }
 .live-mark[data-s="saving"], .live-mark[data-s="offline"] { color: var(--muted); }
 .live-mark[data-s="paused"], .live-mark[data-s="error"] { color: var(--yellow); border-color: var(--yellow); }

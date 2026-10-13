@@ -50,6 +50,7 @@ Rules for the zip:
 ## 1b. Size budget
 
 - Keep one deck under about **50 MB and 1000 cards**. Phones handle up to about 100 MB, and the app checks free storage before saving.
+- A zip with more than 300 image files opens after its first 8 cards are checked; the rest load in the background while the hooman works. Store images in the zip without compression (PNG and JPEG are compressed already), so each one can be read straight away.
 - **Reuse images.** Many cards may point at the same image path (one card per object with `focus`). The file is stored once.
 - Use JPEG (quality about 85) for photos. Use PNG for microscopy and masks, 8-bit when there are fewer than 256 objects. Keep the long side at 2048 px or less.
 - **Split bigger sets into parts.** Use one deck per part with its own `id` (`cells-part1`, `cells-part2`, …) and title (`Cells (1/3)`). Card IDs stay unique across parts, so the answers join back together.

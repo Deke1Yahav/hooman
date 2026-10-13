@@ -37,7 +37,8 @@ app/                    the whole app: static files, no build step
   vendor/qrcode.mjs     QR code generator (Kazuhiko Arase, MIT)
   js/prefs.js           per-viewer settings (localStorage)
   js/deck.js            deck.json -> normalized deck + LLM-pasteable errors
-  js/importer.js        zip / deck.json / link import, size checks
+  js/importer.js        zip / deck.json / link import, size checks; big zips (300+ images) open after their first cards
+  js/loading.js         the background loading of big decks: the card on screen first, resumable by picking the zip again
   js/view.js            card renderer (pixel-exact vector mask outlines)
   js/png.js             label-PNG decode/encode (8/16-bit, palette, RGB), image size sniffing
   js/zip.js             zip read (deflate, zip64) / write
@@ -59,6 +60,7 @@ tests/e2e_v3.py         0.3 features: tap/follow answers, notes, number/text, pe
 tests/e2e_v4.py         0.4: decks from photos, sharing (file, link, QR), Drive features against a stand-in Google
 tests/e2e_v5.py         0.4: channels per time frame, narrow-card layout, Start from across frames / bold only
 tests/e2e_v6.py         0.4.2-0.4.4: the install button (Android dialog or steps, iPhone, installed app, computers), the Drive guide
+tests/e2e_v8.py         0.6: big decks open at once and load in the background (jump ahead, broken card, restart + resume)
 tests/e2e_v7.py         0.5: live save to a folder (in the installed Google Chrome) and to Google Drive (stand-in): merging,
                         pausing and reconnecting, team folders, the crash guard
 reference/              the earlier claude.ai pages this app grew from (read-only)
@@ -82,6 +84,7 @@ python tests/e2e_v4.py
 python tests/e2e_v5.py
 python tests/e2e_v6.py
 python tests/e2e_v7.py
+python tests/e2e_v8.py
 python skill/tests/test_skill.py
 ```
 
