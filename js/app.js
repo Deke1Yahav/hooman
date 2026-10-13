@@ -150,7 +150,7 @@ function deckRow(d, done) {
       <button class="rowmenu" data-act="rowmenu" data-key="${esc(d.key)}" aria-label="More for ${esc(d.title)}">⋮</button></div>`;
 }
 const cloudRow = (a) => `<div class="deckitem"><button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
-      <b>${esc(zipTitle(a.name))}</b><span class="count">☁ ${sizeMB(a.size)}</span>
+      <b>${esc(zipTitle(a.name))}</b><span class="count">☁${a.size ? ` ${sizeMB(a.size)}` : ""}</span>
       <span class="sub">${a.update ? "A newer version is in your folder · tap to load" : "In your folder · tap to load"}</span></button>
       <button class="rowmenu" data-act="zipmenu" data-zip="${esc(a.name)}" aria-label="More for ${esc(zipTitle(a.name))}">⋮</button></div>`;
 
@@ -158,10 +158,11 @@ const cloudRow = (a) => `<div class="deckitem"><button class="deckrow cloud" dat
 async function rowMenu(key) {
   const rec = await store.getDeck(key);
   if (!rec) return;
-  const archived = isArchived(rec, (await store.answersOf(key)).length);
+  const archived = isArchived(rec, (await store.answersOf(key)).length), zip = dfolder.isOn() ? dfolder.zipOf(key) : "";
   const sh = openSheet(`<h3>${esc(rec.title)}</h3><p class="mono muted" style="font-size:12px;margin:-4px 0 0">${esc(key)}</p>
     <div class="menu">
       <button class="btn quiet" data-r="open">Open</button>
+      ${zip ? `<button class="btn quiet" data-r="update">Update from the folder<small>downloads ${esc(zip.split("/").pop())} to see if it changed; answers are kept</small></button>` : ""}
       <button class="btn quiet" data-r="shelf">${archived ? "Back to To do" : "Move to archive"}</button>
       <button class="btn danger" data-r="delete">Delete from this phone</button>
     </div>`);
@@ -169,6 +170,7 @@ async function rowMenu(key) {
     const r = e.target.closest("[data-r]");
     if (!r) return;
     if (r.dataset.r === "open") { sh.close(); return go(`#/deck/${encodeURIComponent(key)}`); }
+    if (r.dataset.r === "update") { sh.close(); return loadZip(zip, false, true); }
     if (r.dataset.r === "delete") return deleteSheet(rec);
     rec.shelf = archived ? "active" : "archive"; await saveRec(rec);
     sh.close(); toast(archived ? "Back in To do" : "Moved to the Archive"); home();
@@ -464,7 +466,8 @@ const secs = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
 // "Tap to load" a deck waiting in the decks folder (or finish one that wasn't fully saved), then open it.
 // "Finish now" on a card shows, in place of its buttons, what the folder is doing (the home screen's folder line
 // isn't there): the card's note is marked with the zip, and a re-drawn card ends it.
-async function loadZip(name, finish = false) {
+// update: the deck's ⋮ "Update from the folder" (stays on the home screen and says whether the zip had changed).
+async function loadZip(name, finish = false, update = false) {
   const note = finish && S ? $("#stage .card-note") : null;
   if (note) note.dataset.finish = name;
   const mine = () => note && note.isConnected && note.dataset.finish === name;
@@ -475,7 +478,7 @@ async function loadZip(name, finish = false) {
   };
   const off = note ? dfolder.onStatus(paint) : null;
   if (dfolder.status().status === "paused") await dfolder.regain(false);   // access lapsed: asked inside this tap
-  const key = await dfolder.load(name, S ? S.key : null, finish ? "you tapped Finish now" : "you tapped it");
+  const key = await dfolder.load(name, S ? S.key : null, finish ? "you tapped Finish now" : update ? "you tapped Update from the folder" : "you tapped it");
   off && off();
   if (!key) {
     const s = dfolder.status();
@@ -491,6 +494,7 @@ async function loadZip(name, finish = false) {
     return;
   }
   if (finish) { toast("Saving the rest of the deck on the phone…", 3000); if (S && S.key === key) return showCard(); }
+  if (update) { if (!dfolder.status().updated.length) toast("Already up to date: the zip in the folder hasn't changed", 4000); return; }
   go(`#/deck/${encodeURIComponent(key)}`);
 }
 
