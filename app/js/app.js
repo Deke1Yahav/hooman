@@ -831,6 +831,7 @@ function buildDeckScreen() {
   cleanup.push(() => { window.removeEventListener("resize", onResize); document.removeEventListener("keydown", onDeckKey); app.onclick = null; });
 }
 
+const phoneScreen = () => matchMedia("(max-width: 599px)").matches;
 function renderAnswerButtons() {
   const el = $("#answers"), mode = modeOf(S.rec.deck);
   if (mode === "follow") {
@@ -851,15 +852,18 @@ function renderAnswerButtons() {
       ${ARROW[d.slot] ? `<span class="arrow">${ARROW[d.slot]}</span>` : ""}<span class="lbl">${esc(d.label)}</span></button>`;
   const L = S.dirDefs.get("left"), R = S.dirDefs.get("right"), U = S.dirDefs.get("up"), D = S.dirDefs.get("down");
   let h = "";
-  const total = S.dirDefs.size + S.buttonDefs.length, compact = total > 6 || !!S.forceCompact;
+  // Compact on a phone (any view: side by side never asked for it), with many answers, or when the image needs the
+  // room: one-line tally and legend, two-line question, one-line card footer, smaller buttons. The image gets the rest.
+  const total = S.dirDefs.size + S.buttonDefs.length, compact = total > 6 || !!S.forceCompact || phoneScreen();
   el.classList.toggle("compact", compact);
   $(".deckscreen").classList.toggle("compact", compact);
-  if (compact) {
+  if (compact) {                                  // a 60-column grid: rows of 1-4 share it evenly
     const dirs = [L, R, U, D].filter(Boolean), nb = S.buttonDefs.length;
-    h += dirs.map((d) => btn(d, "", 12 / dirs.length)).join("");
-    const per = nb <= 4 ? nb : nb <= 6 ? 3 : 4;
-    h += S.buttonDefs.map((d) => btn(d, "", 12 / Math.max(1, per))).join("");
-    h += `<button class="ans undo" data-act="undo" style="grid-column:span 12"><span class="lbl">Undo</span></button>`;
+    h += dirs.map((d) => btn(d, "", 60 / dirs.length)).join("");
+    const per = nb <= 4 ? nb : nb <= 6 ? 3 : 4, last = nb - per * (Math.ceil(nb / Math.max(1, per)) - 1);
+    // the extra buttons in rows of `per`; Undo takes a fifth of the last row (its own short row when there are none)
+    h += S.buttonDefs.map((d, i) => btn(d, "", i >= nb - last ? 48 / last : 60 / per)).join("");
+    h += `<button class="ans undo${nb ? "" : " alone"}" data-act="undo" style="grid-column:span ${nb ? 12 : 60}"><span class="lbl">Undo</span></button>`;
     el.innerHTML = h;
     $("#hint").textContent = "";
     return;
@@ -908,7 +912,7 @@ function layoutCard() {
   const stage = $("#stage"), main = $(".deckscreen");
   main.classList.remove("scroll"); stage.style.minHeight = "";
   const sw = stage.clientWidth, sh = stage.clientHeight;
-  const foot = $(".cardfoot", S.cardEl), two = !!card.info && (sw < 400 || card.info.length > 28);
+  const foot = $(".cardfoot", S.cardEl), two = !!card.info && card.info.length * 6.7 > sw - 100 - 6.7 * card.id.length;
   foot.classList.toggle("two", two);                 // a long caption gets its own line
   const extra = (two ? 58 : 26) + (card.frames.length > 1 ? 36 : 0) + (nch(card) > 1 ? 36 : 0) + 2;
   const r = viewRect(card), grid = S.cview === "side" && nch(card) > 1, aspect = r[2] / r[3];

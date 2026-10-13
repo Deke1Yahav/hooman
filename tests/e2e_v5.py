@@ -31,7 +31,7 @@ CANVAS_RGB = """(() => { const c = document.querySelector('%s'); const d = c.get
   let r = 0, g = 0, b = 0; for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; } const n = d.length / 4; return [r / n, g / n, b / n]; })()"""
 
 
-def layout_deck():
+def layout_deck(buttons=("Division", "Dead", "Debris", "Out of focus"), info="e400: 3 links, PyTrack: 2 links, frames 529-532", view=None, deck_id="t-layout"):
     """Square image, 4 time frames x 2 channels, 8 answers, a long caption: the narrow-card case from a real phone."""
     files, frames = {}, []
     r = np.random.default_rng(5)
@@ -41,15 +41,17 @@ def layout_deck():
         frames.append({"name": f"t{t + 1}", "image": f"c1_{t}.png", "channels": [f"c2_{t}.png"]})
     lab = np.zeros((128, 128)); lab[30:70, 30:70] = 1; lab[80:110, 60:100] = 2
     files["m.png"] = png8(lab)
-    deck = {"hooman": 1, "id": "t-layout", "question": "Which model is right for the bold cell in every frame?", "frames_are": "time",
+    deck = {"hooman": 1, "id": deck_id, "question": "Which model is right for the bold cell in every frame?", "frames_are": "time",
             "channels": [{"name": "electra", "color": "#3ddc97"}, {"name": "Oblique", "color": "#ffffff"}],
             "sources": {"e400": {}, "pytrack": {}, "look": {"guide": True}},
             "answers": {"left": {"label": "PyTrack right", "value": "pytrack"}, "right": {"label": "e400 right", "value": "e400"},
                         "up": {"label": "Both wrong", "value": "both_wrong", "then": "draw"}, "down": "Unsure"},
-            "buttons": ["Division", "Dead", "Debris", "Out of focus"],
-            "cards": [{"id": f"c{k}", "frames": frames, "info": "e400: 3 links, PyTrack: 2 links, frames 529-532",
+            "buttons": list(buttons),
+            "cards": [{"id": f"c{k}", "frames": frames, "info": info,
                        "overlays": [{"source": "e400", "mask": "m.png"}, {"source": "e400", "mask": "m.png", "value": 1, "style": "bold"},
                                     {"source": "pytrack", "mask": "m.png"}, {"source": "look", "box": [20, 20, 60, 60]}]} for k in range(3)]}
+    if view:
+        deck["channel_view"] = view
     assert_schema(deck)
     return bad_zip(deck, files)
 
@@ -212,6 +214,25 @@ def main():
             check(q.locator("#answers").get_attribute("class").count("compact") == 1, f"{w}x{h}: more than 6 answers use the compact buttons")
             q.screenshot(path=OUT / f"53_layout_{w}x{h}.png", full_page=True)
             c2.close()
+
+        print("3. a phone, 6 answers, side by side from the start: compact, so the images get the room")
+        (OUT / "t-layout6.zip").write_bytes(layout_deck(buttons=["Debris", "Not a cell"], info="one or two · movie 59 · frame 756", view="side", deck_id="t-layout6"))
+        c3 = browser.new_context(viewport={"width": 390, "height": 760}, device_scale_factor=2, is_mobile=True, has_touch=True, service_workers="block")
+        q = c3.new_page(); watch(q, errors)
+        q.goto(base); q.wait_for_selector(".hero")
+        q.locator("#file").set_input_files(str(OUT / "t-layout6.zip"))
+        expect(q.locator(".sheet h3")).to_contain_text("Ready", timeout=10000)
+        q.get_by_role("button", name="Open the deck").click(); q.wait_for_selector(".card canvas"); q.wait_for_timeout(300); dismiss_tour(q); q.wait_for_timeout(300)
+        box = lambda sel: q.locator(sel).bounding_box()
+        check("compact" in q.locator("#answers").get_attribute("class"), "a phone gets the compact layout, even with 6 answers in side by side")
+        check(box("#chips")["height"] <= 34 and box(".cardfoot")["height"] <= 28,
+              f"the legend is one row and the card footer one line ({box('#chips')['height']:.0f}px, {box('.cardfoot')['height']:.0f}px)")
+        rows = q.evaluate("new Set([...document.querySelectorAll('#answers .ans')].map((b) => Math.round(b.getBoundingClientRect().top))).size")
+        check(rows == 2, f"6 answers and Undo take two rows ({rows})")
+        cv = box(".card canvas")
+        check(cv["height"] >= 0.45 * 760, f"the images get most of the screen ({cv['height']:.0f}px of 760)")
+        q.screenshot(path=OUT / "54_layout_phone_side.png")
+        c3.close()
 
         check(not errors, "no console errors" + ("" if not errors else ": " + " | ".join(errors[:5])))
         browser.close()
