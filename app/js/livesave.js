@@ -223,6 +223,20 @@ export async function reconnect(t) {
 }
 export const paused = () => TARGETS.filter((t) => st[t].status === "paused");
 
+// After the app was in the background (see decksfolder.regain): the live save folder's access, asked for inside a
+// tap. When it is the decks folder's "results", the decks folder's access (asked for first) already covers it.
+export async function regain() {
+  if (!isOn("folder")) return false;
+  if (!dir && !folderLost) { const r = await loadHandle("live-folder"); dir = r.handle || null; folderLost = r.lost || false; }
+  if (!dir) return false;
+  try {
+    if ((await dir.queryPermission({ mode: "readwrite" })) !== "granted" && (await dir.requestPermission({ mode: "readwrite" })) !== "granted") return false;
+  } catch { return false; }
+  await refresh();
+  flushAll();
+  return true;
+}
+
 async function refresh() {
   for (const t of TARGETS) {
     const r = await ready(t);

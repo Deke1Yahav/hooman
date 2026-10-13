@@ -253,6 +253,16 @@ def main():
         check(page.locator(".deckrow.cloud", has_text="tap-two").count() == 0, "a hidden zip stays out of the list after a check")
         page.evaluate("localStorage.removeItem('hooman:decks.autoMax'); localStorage.removeItem('test:decksdir')")
 
+        print("After the background, the next tap anywhere reconnects both folders")
+        page.evaluate("localStorage.setItem('test:perm', 'prompt')")
+        page.reload(); page.wait_for_selector(".hero"); page.wait_for_timeout(1000)
+        check(page.locator(".folder-line.warn").count() == 1, "access lapsed: the folder line asks for a tap")
+        page.locator(".hero h1").click(); page.wait_for_timeout(1500)
+        check(page.evaluate("localStorage.getItem('test:perm')") == "granted" and page.locator(".folder-line.warn").count() == 0,
+              "a tap on anything (here the title) asked again: the decks folder is back")
+        st = page.evaluate("import('./js/livesave.js').then((m) => m.status().folder.status)")
+        check(st in ("ok", "saving"), f"and live save in its results folder with it ({st})")
+
         print("Reconnect says when the phone refuses")
         page.evaluate("localStorage.setItem('test:perm', 'prompt'); localStorage.setItem('test:deny', '1')")
         page.reload(); page.wait_for_selector(".hero"); page.wait_for_timeout(800)
