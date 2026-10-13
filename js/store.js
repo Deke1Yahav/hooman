@@ -109,13 +109,19 @@ function archiveOf(deckKey) {
   }
   return archives.get(deckKey);                 // null (no zip: a small deck) is remembered too
 }
+// The picked zip can stop being readable (a file from Google Drive on Android loses its access, or the zip changed):
+// a read is tried at once, and when it fails the picked zip is dropped for the saved copy.
 async function fromArchive(deckKey, path) {
   const s = sessions.get(deckKey);
-  if (s) { try { const b = await s(path); if (b) return b; } catch { /* not in the picked zip: try the saved one */ } }
+  if (s) {
+    try { const b = await s(path); if (b) { await b.slice(0, 1).arrayBuffer(); return b; } }
+    catch (e) { if (e && e.name === "NotReadableError") sessions.delete(deckKey); }
+  }
   const a = await archiveOf(deckKey);
   const e = a && a.files.get(a.root + path);
   return e ? e.blob() : null;
 }
+export async function hasArchive(deckKey) { return !!(await archiveOf(deckKey)); }
 
 export async function answersOf(deckKey) {
   const d = await db();

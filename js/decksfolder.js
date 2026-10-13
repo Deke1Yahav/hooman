@@ -252,13 +252,15 @@ async function take(file, was, openKey, asked = false) {
   try { imported = await importBlob(file); }
   catch (e) { return { errors: e.errors || [e.message || String(e)] }; }
   const id = imported.deck.id, existing = await store.getDeck(id);
-  if (existing && id === openKey) return { later: true };
   if (!existing) { const rec = await saveDeck(imported, "new"); return { deck: rec.key, added: rec.title }; }
   const lo = loadingOf(id);
-  if (lo && !lo.active && imported.lazy) {                      // the deck wasn't fully saved: finish it from this zip
-    loadInBackground(existing, imported.lazy);
+  // The deck wasn't fully saved, or (asked: "Finish now") it has no saved zip yet, as decks loaded by 0.7 card by
+  // card, where cards whose files couldn't be read are missing: save this zip whole, which fills them in.
+  if (imported.lazy && ((lo && !lo.active) || (asked && !(await store.hasArchive(id))))) {
+    loadInBackground(existing, imported.lazy);                  // saving never changes the deck: fine while it is open
     return { deck: id };
   }
+  if (id === openKey) return { later: true };                   // an update waits until the deck isn't on screen
   // First sight of a deck that is already here: update only if the zip is newer than the deck on the phone.
   if (!asked && !was && Date.parse(existing.updatedAt || 0) >= file.lastModified) return { deck: id };
   if (asked && was && was.deck === id && was.mod === file.lastModified && !lo) return { deck: id };

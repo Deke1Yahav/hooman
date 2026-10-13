@@ -861,6 +861,9 @@ async function showCard() {
   $$("#answers .ans:not(.undo)").forEach((b) => (b.disabled = !card));
   if (undoBtn) undoBtn.disabled = S.answers.size === 0;
   if (!card) { S.cardEl = null; return showDone(); }
+  // 0.7 marked cards whose files couldn't be read as broken for good; only a failed check (its message starts
+  // with "cards[") is. The others are checked again: shown if their files are here, else finished from the zip.
+  if (card.broken && !/^cards\[/.test(card.broken)) delete card.broken;
   if (!card.w || card.broken) {                 // a big deck still loading: this card first
     if (!card.broken) {
       stage.innerHTML = `<div class="card-note"><b>Loading this card…</b></div>`;
