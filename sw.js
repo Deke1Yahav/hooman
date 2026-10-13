@@ -1,7 +1,7 @@
-// Offline app shell (stale-while-revalidate) + Android share target: a zip shared to the
+// Offline app shell (one whole version per sw.js) + Android share target: a zip shared to the
 // installed app is parked in the "hooman-inbox" cache and picked up by the page (?shared=1).
 
-const VERSION = "hooman-0.11.6";
+const VERSION = "hooman-0.11.7";
 const SHELL = [
   "./", "index.html", "app.css", "manifest.webmanifest", "llms.txt", "deck.schema.json",
   "js/app.js", "js/store.js", "js/importer.js", "js/zip.js", "js/png.js", "js/deck.js", "js/view.js", "js/export.js", "js/editor.js", "js/prefs.js", "js/contrast.js", "js/settings.js", "js/tapping.js", "js/gestures.js", "js/backup.js", "js/results.js", "js/share.js", "js/photos.js", "js/drive.js", "js/config.js", "js/install.js", "js/livesave.js", "js/loading.js", "js/handles.js", "js/decksfolder.js", "vendor/qrcode.mjs",
@@ -10,9 +10,14 @@ const SHELL = [
   "examples/index.json",
 ];
 
+// The shell is one version, whole: fetched from the server itself (cache: "reload"), never from the browser's copies,
+// and never changed in place. GitHub Pages lets browsers keep a file 10 minutes (max-age=600): 0.11.6 filled from
+// those copies ran 0.11.5's decksfolder.js. A new version comes only with a new sw.js (VERSION), and the page reloads
+// into it (app.js: controllerchange).
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
 });
+const shellURLs = () => new Set(SHELL.map((u) => new URL(u, self.registration.scope).href));
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys()
@@ -36,8 +41,12 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method === "POST" && url.pathname.endsWith("/share-target")) return e.respondWith(takeShare(e.request));
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
+  const shell = shellURLs().has(url.origin + url.pathname);
   e.respondWith(caches.match(e.request, { ignoreSearch: true }).then((hit) => {
-    const net = fetch(e.request).then((r) => {
+    if (hit && shell) return hit;                                    // this version's file, as installed
+    // anything else (examples, a shell file missing from the cache): from the server (asked whether it changed,
+    // never the browser's 10-minute copy), the cached one when offline
+    const net = fetch(e.request.url, { cache: "no-cache" }).then((r) => {
       if (r.ok && r.type === "basic") { const copy = r.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); }
       return r;
     }).catch(() => hit || Response.error());
