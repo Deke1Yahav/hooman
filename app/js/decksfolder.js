@@ -162,10 +162,12 @@ export function check({ force = false, openKey = null, quiet = false, fresh = fa
           const rec = await store.getDeck(base);
           if (Date.parse(rec.updatedAt || 0) >= file.lastModified) { seen[name] = was = { mod: file.lastModified, size: file.size, deck: base }; prefs.set("decks.seen", seen); }
         }
+        if (was && was.hidden && was.mod === file.lastModified) continue;          // hidden by the hooman, until it changes
+        if (was && was.removed && was.mod === file.lastModified) { available.push({ name, size: file.size, mod: file.lastModified, update: false }); continue; }
         const changed = !was || was.mod !== file.lastModified || was.size !== file.size;
         const resume = was && was.deck && loadingOf(was.deck) && !loadingOf(was.deck).active;
         if (!changed && !resume) { if (was.errors) errors.push({ name, errors: was.errors }); continue; }
-        if (!resume && file.size > autoMax()) { available.push({ name, size: file.size, update: !!(was && was.deck) }); continue; }
+        if (!resume && file.size > autoMax()) { available.push({ name, size: file.size, mod: file.lastModified, update: !!(was && was.deck) }); continue; }
         mine({ msg: `Reading ${short(name)} (${found} of ${zips.length}${file.size > 5e6 ? `, ${MB(file.size)}: files on Drive download first` : ""})…` });
         const r0 = performance.now();
         const r = await within(take(file, was, openKey), 15 * 60000, `Reading ${short(name)}`);
@@ -222,6 +224,26 @@ export function load(name, openKey = null) {
     } finally { if (my === runId) running = null; }
   })();
   return running;
+}
+
+// A deck from the folder was deleted from the phone: its zip goes back to "tap to load" (never loaded by itself).
+export function removed(deckKey) {
+  const seen = prefs.get("decks.seen", {}), available = st.available.slice();
+  for (const [name, v] of Object.entries(seen)) {
+    if (!v || v.deck !== deckKey) continue;
+    seen[name] = { ...v, removed: true };
+    if (!available.some((a) => a.name === name)) available.push({ name, size: v.size, mod: v.mod, update: false });
+  }
+  prefs.set("decks.seen", seen); prefs.set("decks.available", available);
+  set({ available });
+}
+// "Hide from this list": a zip waiting for a tap stays out of the list until it changes.
+export function hide(name) {
+  const a = st.available.find((x) => x.name === name), seen = prefs.get("decks.seen", {});
+  seen[name] = { ...(seen[name] || {}), mod: a ? a.mod : (seen[name] || {}).mod, size: a ? a.size : 0, hidden: true };
+  const available = st.available.filter((x) => x.name !== name);
+  prefs.set("decks.seen", seen); prefs.set("decks.available", available);
+  set({ available });
 }
 
 // One zip: import it, update its deck, or finish its saving. asked: the hooman tapped it (update even if not newer).

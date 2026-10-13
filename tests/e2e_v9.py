@@ -221,6 +221,20 @@ def main():
         check("tap-one" in page.url, "a tap loads that deck and opens it")
         page.goto(base + "#/"); page.wait_for_selector(".hero")
         check(page.locator(".deckrow.cloud").count() == 1 and page.locator(".deckrow", has_text="Tap one").count() == 1, "the other one still waits; the loaded one is a deck now")
+        print("Deleting a folder deck from the phone keeps it one tap away; a waiting zip can be hidden")
+        page.locator(".deckitem", has_text="Tap one").locator("[data-act=rowmenu]").click(); page.wait_for_selector(".sheet .menu")
+        page.locator(".sheet [data-r=delete]").click(); page.wait_for_selector(".sheet h3:has-text('Delete')")
+        check("stays in" in page.locator(".sheet").inner_text(), "Delete says the zip stays in the folder")
+        page.locator(".sheet [data-del]").click(); page.wait_for_timeout(700)
+        check(page.locator(".deckrow:not(.cloud)", has_text="Tap one").count() == 0 and page.locator(".deckrow.cloud", has_text="tap-one").count() == 1,
+              "the deck left the phone and is back as tap to load")
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(1500)
+        check(page.locator(".deckrow.cloud", has_text="tap-one").count() == 1 and page.locator(".deckrow:not(.cloud)", has_text="Tap one").count() == 0,
+              "a check doesn't load it back by itself")
+        page.locator(".deckitem", has_text="tap-two").locator("[data-act=zipmenu]").click(); page.wait_for_selector(".sheet .menu")
+        page.locator(".sheet [data-z=hide]").click(); page.wait_for_timeout(500)
+        page.locator("[data-act=checkdecks]").click(); page.wait_for_timeout(1500)
+        check(page.locator(".deckrow.cloud", has_text="tap-two").count() == 0, "a hidden zip stays out of the list after a check")
         page.evaluate("localStorage.removeItem('hooman:decks.autoMax'); localStorage.removeItem('test:decksdir')")
 
         print("Reconnect says when the phone refuses")
