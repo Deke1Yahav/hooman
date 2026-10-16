@@ -31,7 +31,7 @@ export function startLoading(key, { total, file, get }) {
   emit(key, { progress: true });
   store.putArchive(key, file).then(() => {
     if (job.stop) return;
-    jobs.delete(key); prefs.del(stateKey(key));
+    jobs.delete(key); prefs.del(stateKey(key)); store.endSession(key);
     emit(key, { done: true, total });
   }, (e) => {
     if (job.stop) return;

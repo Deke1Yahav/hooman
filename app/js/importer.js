@@ -191,8 +191,15 @@ function webSource(baseURL, name) {
 }
 
 // file: a File/Blob from the picker or the share sheet.
+// It is read into memory once, first (up to 200 MB): a file from Google Drive on Android can stop being readable a
+// moment later (NotReadableError), which left a big deck's background save and its cards with nothing to read, so
+// black cards. From memory, the save and the cards shown meanwhile never touch the picked file again.
 export async function importBlob(file, onProgress) {
   const name = file.name || "deck.zip";
+  if (file.size && file.size <= 200e6) {
+    try { file = new File([await file.arrayBuffer()], name, { type: file.type || "application/zip", lastModified: file.lastModified || Date.now() }); }
+    catch (e) { throw Object.assign(new ImportError([`${name}: could not read the zip (${e.message})`]), { io: true }); }
+  }
   const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
   if (head[0] === 0x50 && head[1] === 0x4b) {
     let files;

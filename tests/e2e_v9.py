@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 from e2e import OUT, serve, check, failures, dismiss_tour
 from e2e_v3 import watch
-from e2e_v8 import big_deck, UNSAVE
+from e2e_v8 import big_deck, UNSAVE, wait_done
 
 PICK = """if (window.FileSystemHandle) {
   window.showDirectoryPicker = async (o) => {
@@ -48,6 +48,18 @@ PICK = """if (window.FileSystemHandle) {
     const slow = +(localStorage.getItem("test:slowfile") || 0);
     if (slow) await new Promise((r) => setTimeout(r, slow));
     const f = await getFile.call(this);
+    // test:stale "name|ms": as a file from Google Drive on Android, readable at first, then not (NotReadableError):
+    // a copy whose file is rewritten ms later, which makes this snapshot unreadable
+    const stale = (localStorage.getItem("test:stale") || "").split("|");
+    if (stale[0] === this.name) {
+      localStorage.removeItem("test:stale");
+      const tmp = await (await navigator.storage.getDirectory()).getDirectoryHandle("stale-tmp", { create: true });
+      const h = await tmp.getFileHandle(this.name, { create: true });
+      const w = await h.createWritable(); await w.write(await f.arrayBuffer()); await w.close();
+      const snap = await h.getFile();
+      setTimeout(async () => { const w2 = await h.createWritable(); await w2.write(new Uint8Array([1, 2, 3])); await w2.close(); }, +stale[1]);
+      return snap;
+    }
     if (localStorage.getItem("test:unreadable") !== this.name) return f;
     const bad = () => Promise.reject(new DOMException("The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.", "NotReadableError"));
     return new Proxy(f, { get(t, k) { if (k === "slice") return () => ({ arrayBuffer: bad, text: bad }); if (k === "arrayBuffer" || k === "text") return bad;
@@ -308,6 +320,43 @@ def main():
         page.locator(".sheet [data-r=update]").click(); page.wait_for_timeout(1500)
         check("Already up to date" in page.locator("#toast").inner_text(), "and says so when it hasn't changed")
         page.evaluate("localStorage.removeItem('hooman:decks.namesOnly'); localStorage.removeItem('test:decksdir')")
+
+        print("A big deck whose Drive file stops being readable right after it is loaded: every card still shows")
+        page.evaluate("localStorage.setItem('test:decksdir', 'stale'); localStorage.setItem('hooman:decks.namesOnly', 'true')")
+        page.evaluate(PUT, ["stale/stale-big.hooman.zip", b64(big_deck("stale-big").read_bytes())])
+        page.locator("[data-act=settings]").click(); page.wait_for_selector(".sheet #decks-row")
+        page.locator(".sheet [data-decks=off]").click(); page.wait_for_timeout(300)
+        page.locator(".sheet [data-decks=on]").click(); page.wait_for_timeout(1500)
+        page.keyboard.press("Escape"); page.goto(base + "#/"); page.wait_for_selector(".hero")
+        page.evaluate("localStorage.setItem('test:stale', 'stale-big.hooman.zip|150')")
+        page.locator(".deckrow.cloud", has_text="stale-big").click()
+        page.wait_for_selector(".card canvas", timeout=30000); dismiss_tour(page)
+        lit = """() => { const c = document.querySelector('.card canvas'); if (!c || !c.width) return -1;
+          const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0;
+          for (let i = 0; i < d.length; i += 4 * 97) if (d[i] + d[i + 1] + d[i + 2] > 30) n++; return n; }"""
+        shown = []
+        for k in range(6):
+            page.wait_for_timeout(700)
+            shown.append((page.locator(".card-note").count() == 0, page.evaluate(lit) > 0))
+            page.keyboard.press("ArrowRight")
+        check(all(a and b for a, b in shown), f"the first cards show their images, none black ({shown})")
+        saved = wait_done(page, "stale-big", timeout=60)
+        check(saved is not None and "Could not save" not in page.locator("#toast").inner_text(), "and the deck is saved whole on the phone")
+        page.goto(base + "#/deck/stale-big?card=c300"); page.wait_for_selector(".card canvas", timeout=20000); page.wait_for_timeout(800)
+        check(page.locator(".card-note").count() == 0 and page.evaluate(lit) > 0, "a card far ahead shows its image too")
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
+        page.evaluate("localStorage.removeItem('hooman:decks.namesOnly'); localStorage.removeItem('test:decksdir')")
+
+        print("After the saved zip is lost, a card is never black")
+        page.evaluate(UNSAVE, "stale-big")
+        page.reload(); page.wait_for_selector(".hero"); page.wait_for_timeout(500)
+        page.goto(base + "#/deck/stale-big?card=c300"); page.wait_for_selector(".card-note, .card canvas", timeout=20000); page.wait_for_timeout(800)
+        # the app's own check finishes the deck from the folder by itself (resume), so the card may already show
+        note = page.locator(".card-note").inner_text() if page.locator(".card-note").count() else ""
+        offers = "isn't on the phone yet" in note and page.locator(".card-note [data-act=finishzip], .card-note [data-act=repick]").count() == 1
+        check(offers or (page.locator(".card canvas").count() == 1 and page.evaluate(lit) > 0),
+              f"the card shows its image, or says why and offers to finish the deck; never black ({note.splitlines()[0] if note else 'image'!r})")
+        page.goto(base + "#/"); page.wait_for_selector(".hero")
 
         print("After the background, the next tap anywhere reconnects both folders")
         page.evaluate("localStorage.setItem('test:perm', 'prompt')")

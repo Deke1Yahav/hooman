@@ -81,6 +81,7 @@ export async function getFile(deckKey, path) {
 export const ARCHIVE = "\u0000deck.zip";
 const sessions = new Map(), archives = new Map();
 export function useSession(deckKey, get) { sessions.set(deckKey, get); }
+export function endSession(deckKey) { sessions.delete(deckKey); }     // the zip is saved: its copy in memory can go
 export async function putArchive(deckKey, blob) {
   const d = await db();
   const tx = d.transaction("archives", "readwrite");
