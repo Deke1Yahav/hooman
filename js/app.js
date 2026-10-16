@@ -401,12 +401,16 @@ function pickZipAgain() {
   inp.onchange = () => { const f = inp.files[0]; if (f) importFile(f); };
   inp.click();
 }
-// The card on screen can't be shown yet: still loading (wait), broken, or not on the phone (pick the zip again).
+// The card on screen can't be shown yet: broken, still being saved (it shows by itself when the save ends: start(),
+// onLoading), or not on the phone (finish from the decks folder, or pick the zip again). Never a black card.
 function showUnloaded(card, why) {
   const stage = $("#stage");
   if (!stage) return;
-  stage.innerHTML = `<div class="card-note">${why === "broken"
+  stage.innerHTML = `<div class="card-note${why === "saving" ? " saving" : ""}">${why === "broken"
     ? `<b>This card can't be shown.</b><p>${esc(card.broken || "")}</p><div class="row"><button class="btn" data-act="skip">Skip it</button></div>`
+    : why === "saving"
+    ? `<b>This card is on its way…</b><p>The deck is still being saved on the phone. This card shows by itself as soon as its images are in.</p>
+       <div class="row"><button class="btn quiet" data-act="skip">Skip for now</button></div>`
     : dfolder.isOn() && dfolder.zipOf(S.key)
     ? `<b>This card isn't on the phone yet.</b><p>The app closed before this deck was saved on the phone. It finishes from your decks folder; your answers stay.</p>
        <div class="row"><button class="btn" data-act="finishzip" data-zip="${esc(dfolder.zipOf(S.key))}">Finish now</button><button class="btn quiet" data-act="skip">Skip</button></div>`
@@ -948,12 +952,14 @@ async function showCard() {
   // 0.7 marked cards whose files couldn't be read as broken for good; only a failed check (its message starts
   // with "cards[") is. The others are checked again: shown if their files are here, else finished from the zip.
   if (card.broken && !/^cards\[/.test(card.broken)) delete card.broken;
+  // Its images can't be read: the deck is still being saved (wait), or wasn't saved whole (finish it).
+  const unreadable = () => { const lo = loadingOf(S.key); return showUnloaded(card, lo && lo.active ? "saving" : "missing"); };
   if (!card.w || card.broken) {                 // a big deck still loading: this card first
     if (!card.broken) {
       stage.innerHTML = `<div class="card-note"><b>Loading this card…</b></div>`;
       const r = await ensureCard(S.key, card, (c) => storedCard(S.key, c));
       if (!S || currentCard() !== card) return;   // the hooman moved on meanwhile
-      if (r === "missing") return showUnloaded(card, "missing");
+      if (r === "missing") return unreadable();
     }
     if (card.broken) return showUnloaded(card, "broken");
   }
@@ -972,7 +978,11 @@ async function showCard() {
   S.view = new CardCanvas($("canvas", el));
   S.view.display = displayFor(S.key, card, S.rec.deck);
   try { await S.view.show(S.rec, card, { hidden: S.hidden, cview: S.cview, chan: S.chan }); }
-  catch (e) { console.error(e); toast(`Could not show this card: ${e.message}`, 4000); }
+  catch (e) {
+    if (!S || currentCard() !== card) return;
+    if (/^missing file/.test((e && e.message) || "")) return unreadable();   // not a black card: say why
+    console.error(e); toast(`Could not show this card: ${e.message}`, 4000);
+  }
   if (!S || currentCard() !== card) return;     // left the deck (or moved on) while the card was drawn
   S.shownAt = performance.now();
   prefetch();
@@ -1966,6 +1976,7 @@ async function start() {
     dfolder.regain().then(() => live.regain()).catch((e) => console.warn("folders", e));
   }, true);
   onLoading((key, ev) => {
+    if ((ev.done || ev.failed) && S && S.key === key && $("#stage .card-note.saving")) showCard();   // the card waiting for the save
     if (ev.failed) return toast(`Could not save the deck on the phone: ${ev.failed}. The phone may be out of storage.`, 5000);
     if (!ev.done) return;
     store.getDeck(key).then((rec) => rec && toast(`“${rec.title}” is saved on the phone`, 3500));
