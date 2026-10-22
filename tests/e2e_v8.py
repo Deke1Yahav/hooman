@@ -145,7 +145,9 @@ def main():
         row = page.locator(".deckrow", has_text="big-2")
         check(row.count() == 1 and "Not fully on the phone" in row.inner_text() and "pick its zip again" in row.inner_text(), "its row says the deck still needs its zip")
         page.screenshot(path=OUT / "83_lazy_restart_home.png")
-        page.goto(base + "#/deck/big-2?card=c390"); page.wait_for_selector(".card-note")
+        page.goto(base + "#/deck/big-2?card=c390")
+        try: page.locator(".card-note", has_text="isn't on the phone yet").wait_for(timeout=20000)   # after "Loading this card…"
+        except Exception: pass
         check("isn't on the phone yet" in page.locator(".card-note").inner_text(), "a card that isn't on the phone asks for the zip again")
         with page.expect_file_chooser() as fc:
             page.locator(".card-note [data-act=repick]").click()

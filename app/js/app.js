@@ -138,18 +138,21 @@ const whenShort = (iso) => {
 };
 const zipTitle = (name) => name.split("/").pop().replace(/\.hooman\.zip$|\.zip$/i, "");
 const sizeMB = (n) => `${n >= 1e7 ? Math.round(n / 1e6) : (n / 1e6).toFixed(1)} MB`;
+// What the home screen's search looks in: a deck's title, id and zip name (a waiting zip: its name).
+const deckQ = (d) => [d.title, d.key, dfolder.isOn() ? dfolder.zipOf(d.key) : ""].filter(Boolean).join(" ").toLowerCase();
+const zipQ = (a) => `${zipTitle(a.name)} ${a.name}`.toLowerCase();
 function deckRow(d, done) {
   const n = d.deck.cards.length, pct = n ? (100 * done) / n : 0, lo = loadingOf(d.key);
   const zip = lo && !lo.active && dfolder.isOn() ? dfolder.zipOf(d.key) : "";
   const sub = lo ? (lo.active ? "Saving to the phone…" : `<b class="warn">Not fully on the phone · ${zip ? "tap to finish" : "pick its zip again"}</b>`)
     : n && done >= n ? `Done${d.openedAt ? ` · opened ${whenShort(d.openedAt)}` : ""}`
     : done ? `Opened ${whenShort(d.openedAt || d.updatedAt)}` : `New · ${n} card${n === 1 ? "" : "s"}`;
-  return `<div class="deckitem"><button class="deckrow" ${zip ? `data-act="finishzip" data-zip="${esc(zip)}"` : `data-open="${esc(d.key)}"`}>
+  return `<div class="deckitem" data-q="${esc(deckQ(d))}"><button class="deckrow" ${zip ? `data-act="finishzip" data-zip="${esc(zip)}"` : `data-open="${esc(d.key)}"`}>
       <b>${esc(d.title)}</b><span class="count">${n && done >= n ? "✓ " : ""}${done} / ${n}</span>
       <div class="pbar"><i style="width:${pct}%"></i></div><span class="sub">${sub}</span></button>
       <button class="rowmenu" data-act="rowmenu" data-key="${esc(d.key)}" aria-label="More for ${esc(d.title)}">⋮</button></div>`;
 }
-const cloudRow = (a) => `<div class="deckitem"><button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
+const cloudRow = (a) => `<div class="deckitem" data-q="${esc(zipQ(a))}"><button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
       <b>${esc(zipTitle(a.name))}</b><span class="count">☁${a.size ? ` ${sizeMB(a.size)}` : ""}</span>
       <span class="sub">${a.update ? "A newer version is in your folder · tap to load" : "In your folder · tap to load"}</span></button>
       <button class="rowmenu" data-act="zipmenu" data-zip="${esc(a.name)}" aria-label="More for ${esc(zipTitle(a.name))}">⋮</button></div>`;
@@ -237,6 +240,23 @@ async function home() {
   const list = tab === "archive" ? archived.sort(opened).map(row).join("")
     : (going.length && fresh.length + avail.length ? `<div class="list-div">Continue</div>` : "") + going.map(row).join("")
       + (going.length && fresh.length + avail.length ? `<div class="list-div">New</div>` : "") + fresh.map(row).join("") + avail.map(cloudRow).join("");
+  // The search (4 decks or more) filters this tab's rows as each letter is typed (filterHome); it also counts
+  // matches in the other tab, one tap away.
+  const searchable = !newcomer && decks.length + avail.length >= 4;
+  homeOther = tab === "archive" ? { tab: "decks", label: "To do", qs: [...active.map(deckQ), ...avail.map(zipQ)] }
+    : { tab: "archive", label: "the Archive", qs: archived.map(deckQ) };
+  const tabsHTML = nArch ? `<div class="tabs-row"><span class="seg tabs"><button data-act="tab" data-tab="decks" aria-pressed="${tab === "decks"}">To do (${nTodo})</button><button data-act="tab" data-tab="archive" aria-pressed="${tab === "archive"}">Archive (${nArch})</button></span></div>`
+    : `<div class="section-title">To do${nTodo ? ` (${nTodo})` : ""}</div>`;
+  const listHTML = list ? `<div class="decks">${list}</div>`
+    : `<div class="empty">${tab === "decks" ? `<b>All done.</b> Finished decks are in the Archive.${folderOn ? ` New zips put in “${esc(dfolder.folderName())}” show up here.` : ""}` : "Nothing archived."}</div>`;
+  // Typing in the search while the list is redrawn (the decks folder, a deck saved): only the list changes, so the
+  // box keeps its letters, its focus and the phone's keyboard.
+  const typing = searchable && document.activeElement && document.activeElement.id === "deck-search" && $("#home-list");
+  if (typing) {
+    $("#home-tabs").innerHTML = tabsHTML; $("#home-list").innerHTML = listHTML;
+    const fl = $("#folder-line"); if (fl) fl.innerHTML = folderLine();
+    return filterHome();
+  }
   const gear = `<button class="icon-btn" data-act="settings" aria-label="Settings and backup" style="margin-left:auto">⚙</button>`;
   const banner = stale ? `<div class="banner"><span>⚠ ${unsaved.length} answer${unsaved.length > 1 ? "s are" : " is"} only on this phone.</span><button class="btn quiet" data-act="backup">Back up</button></div>`
     : `<div id="install-slot">${installBanner()}</div>`;
@@ -253,27 +273,68 @@ async function home() {
       <button class="link-btn" data-act="add">More ways to add a deck</button>
       <button class="link-btn" data-videos>▶ Watch the ${GUIDE_VIDEOS[0].min} video guide</button>
     </div>` : `
-    ${nArch ? `<div class="tabs-row"><span class="seg tabs"><button data-act="tab" data-tab="decks" aria-pressed="${tab === "decks"}">To do (${nTodo})</button><button data-act="tab" data-tab="archive" aria-pressed="${tab === "archive"}">Archive (${nArch})</button></span></div>`
-      : `<div class="section-title">To do${nTodo ? ` (${nTodo})` : ""}</div>`}
-    ${list ? `<div class="decks">${list}</div>` : `<div class="empty">${tab === "decks" ? `<b>All done.</b> Finished decks are in the Archive.${folderOn ? ` New zips put in “${esc(dfolder.folderName())}” show up here.` : ""}` : "Nothing archived."}</div>`}
+    <div id="home-tabs">${tabsHTML}</div>
+    ${searchable ? `<div class="search" role="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+      <input type="search" id="deck-search" placeholder="Search decks" value="${esc(homeQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Search decks">
+      <button class="x" id="search-x" data-act="clearsearch" aria-label="Clear the search" hidden>✕</button>
+    </div>
+    <p class="search-meta" id="search-meta" hidden></p>` : ""}
+    <div id="home-list">${listHTML}</div>
     ${tab === "decks" ? `<button class="btn quiet add-deck" data-act="add">+ Add a deck</button>` : ""}`}
     <p class="foot-note">Stays on this device · <button class="link-btn" data-act="help">Help</button> · v${APP_VERSION}</p>
   </main>
   <input type="file" id="file" accept=".zip,.json,application/zip,application/x-zip-compressed,application/json,application/octet-stream" hidden>`;
   const file = $("#file");
   file.addEventListener("change", () => { const f = file.files[0]; file.value = ""; if (f) importFile(f); });
+  const search = $("#deck-search");
+  if (search) {
+    search.addEventListener("input", () => { homeQuery = search.value; filterHome(); });
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && search.value) { e.stopPropagation(); homeQuery = search.value = ""; filterHome(); }
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const shown = $$("#home-list .deckitem:not([hidden]) .deckrow");
+      if (shown.length === 1) shown[0].click(); else search.blur();       // one match: open it; else close the keyboard
+    });
+    filterHome();
+  } else homeQuery = "";
   drive.warmUp();
   app.onclick = (e) => {
     const b = e.target.closest("[data-act],[data-open]");
     if (!b) return;
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
     if (b.dataset.act === "tab") { prefs.set("homeTab", b.dataset.tab); return home(); }
+    if (b.dataset.act === "clearsearch") { homeQuery = ""; const s = $("#deck-search"); if (s) { s.value = ""; s.focus(); } return filterHome(); }
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
        photos: photosSheet, drive: openFromDrive, install: installFlow, installno: () => { prefs.set("installNo", true); home(); },
        repick: pickZipAgain, checkdecks: decksCheckNow, stopcheck: () => dfolder.stop(), folderrors: () => decksAction("errors"), folderlog: folderLog,
        loadzip: () => loadZip(b.dataset.zip), finishzip: () => loadZip(b.dataset.zip, true), connect: () => decksAction("on"),
        add: addSheet, help: appHelp, rowmenu: () => rowMenu(b.dataset.key), zipmenu: () => zipMenu(b.dataset.zip) })[b.dataset.act]();
   };
+}
+
+// The home screen's search: kept while the app is open (also after opening a deck and coming back). Every word typed
+// must appear in a row's title, id or zip name, in any order and case ("abswin mix" finds fx2_abswin_mix_flow).
+let homeQuery = "", homeOther = { tab: "archive", label: "the Archive", qs: [] };
+function filterHome() {
+  const box = $("#home-list"), meta = $("#search-meta"), x = $("#search-x");
+  if (!box) return;
+  const words = homeQuery.toLowerCase().split(/\s+/).filter(Boolean), hit = (q) => words.every((w) => q.includes(w));
+  const items = $$(".deckitem", box);
+  let shown = 0;
+  items.forEach((it) => { it.hidden = !hit(it.dataset.q || ""); if (!it.hidden) shown++; });
+  $$(".list-div", box).forEach((div) => {          // "Continue" / "New" only above rows still shown
+    let any = false;
+    for (let n = div.nextElementSibling; n && !n.classList.contains("list-div"); n = n.nextElementSibling) if (!n.hidden) { any = true; break; }
+    div.hidden = !any;
+  });
+  if (x) x.hidden = !homeQuery;
+  if (!meta) return;
+  const more = words.length ? homeOther.qs.filter(hit).length : 0;
+  meta.hidden = !words.length;
+  meta.innerHTML = !words.length ? "" : `${shown ? `${shown} of ${items.length}` : `Nothing here matches “${esc(homeQuery.trim())}”`}${
+    more ? ` · <button class="link-btn" data-act="tab" data-tab="${homeOther.tab}">${more} more in ${homeOther.label}</button>` : ""}`;
 }
 
 // Every way to add a deck, behind "+ Add a deck" (the same actions as the newcomer's buttons).
