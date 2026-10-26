@@ -79,13 +79,13 @@ def png(a):
     b = io.BytesIO(); Image.fromarray(a.astype(np.uint8)).save(b, "PNG"); return b.getvalue()
 
 
-def small_deck(title, n=3, deck_id="folder-a"):
+def small_deck(title, n=3, deck_id="folder-a", about=None):
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as z:
         for i in range(n):
             a = np.full((48, 48), 40, np.uint8); a[10:30, 10:30] = 200
             z.writestr(f"img/{i}.png", png(a), compress_type=zipfile.ZIP_STORED)
-        z.writestr("deck.json", json.dumps({"hooman": 1, "id": deck_id, "title": title, "question": "Bright square?",
+        z.writestr("deck.json", json.dumps({"hooman": 1, "id": deck_id, "title": title, "question": "Bright square?", **({"about": about} if about else {}),
                                             "answers": {"right": "Yes", "left": "No"}, "cards": [f"img/{i}.png" for i in range(n)]}))
     return out.getvalue()
 

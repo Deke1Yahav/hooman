@@ -65,6 +65,7 @@ Rules for the zip:
 | `title` | string | Shown in the deck list |
 | `question` | string | Shown above every card. **Leave it out for annotate mode** (section 5). |
 | `help` | string | Longer instructions, shown under the `?` button |
+| `about` | string | **What the deck is, in full**, for the hooman and for any AI that picks it up later without this chat: where the images come from (experiment, dates), how the cards were picked and how many, what each source, colour and overlay is, what the answers will be used for, and the versions (model, labels, builder). Plain text: a blank line starts a paragraph, a line starting with `- ` is a bullet, `**bold**` works. The app shows it under **About this deck** (the deck's ⋮ menu, a tap on its title, and once when the deck is first opened), and the home screen's search looks in it. |
 | `answers` | object | The swipe directions (section 3) |
 | `buttons` | list | Extra answers as buttons (section 3) |
 | `sources` | object | Who made each overlay, and its colour (section 4) |
@@ -388,6 +389,7 @@ with zipfile.ZipFile("compare.hooman.zip", "w") as z:
 - [ ] `deck.json` is at the top of the zip and has `"hooman": 1` and `cards`.
 - [ ] Every path exists in the zip, with exactly that spelling and case.
 - [ ] Card IDs are unique.
+- [ ] `about` says in full what the deck is (sources, how the cards were picked, what the answers are for).
 - [ ] Masks are PNG label images with the same width and height as their image.
 - [ ] Coordinates are in full-image pixels.
 - [ ] The `id` stays the same when rebuilding a deck the hooman has already started.

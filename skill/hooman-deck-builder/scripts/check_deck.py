@@ -17,7 +17,7 @@ import zipfile
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from hooman import image_size  # noqa: E402
 
-TOP = {"hooman", "id", "title", "question", "help", "answers", "buttons", "sources", "classes", "shuffle", "cards", "mode", "frames_are", "channels", "channel_view"}
+TOP = {"hooman", "id", "title", "question", "help", "about", "answers", "buttons", "sources", "classes", "shuffle", "cards", "mode", "frames_are", "channels", "channel_view"}
 CARD = {"id", "image", "frames", "question", "info", "focus", "overlays", "start", "channels"}
 OVERLAY = {"box", "point", "polygon", "mask", "source", "label", "value", "style", "frame"}
 THEN = {"draw", "point", "points", "number", "text"}
@@ -72,6 +72,11 @@ def check_files(deck, files: dict):
     for k in deck:
         if k not in TOP:
             W.append(f"deck.json: unknown field {q(k)} is ignored")
+    for k in ("title", "question", "help", "about"):
+        if k in deck and not isinstance(deck[k], str):
+            E.append(f'deck.json: "{k}" must be text')
+    if not (isinstance(deck.get("about"), str) and deck["about"].strip()):
+        W.append('deck.json: no "about": say what the deck is (where the images come from, how the cards were picked, what the outlines and answers mean); the app shows it under About this deck')
     if "id" in deck and not (isinstance(deck["id"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", deck["id"])):
         E.append(f'deck.json: "id" {q(deck["id"])} may only use letters, digits, ".", "_" and "-" (1-64 characters)')
     mode = deck.get("mode") or ("swipe" if deck.get("question") else "annotate")

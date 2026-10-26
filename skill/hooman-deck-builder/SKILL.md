@@ -40,7 +40,8 @@ Anything else: compose a `Deck` by hand:
 
 ```python
 from hooman import Deck, box, point
-deck = Deck("cells-v1", "Which model got the bold cell right?", title="Cells")
+deck = Deck("cells-v1", "Which model got the bold cell right?", title="Cells",
+            about="Field 1 of experiment X, frames 1-40. Cards: every cell where Cellpose and StarDist disagree (IoU < 0.5), 120 cards.\n- Cellpose: red, StarDist: blue\n- The answers pick the training labels for v2.")
 deck.source("A", label="Cellpose").source("B", label="StarDist").source("look", guide=True)
 deck.answers(left=("Cellpose right", "A"), right=("StarDist right", "B"), up=("Both wrong", "both_wrong", "draw"), down="Unsure")
 img = deck.image(raw_uint16)                         # numpy arrays, file paths or bytes; identical files stored once
@@ -52,6 +53,7 @@ deck.save("cells.hooman.zip")                        # checks first; raises Deck
 
 ## 3. Rules that matter (and why)
 
+- **Say what the deck is (`about`).** Where the images come from, how the cards were picked, what each colour means and what the answers are for, in full. The person sees it under About this deck, and it lets anyone (or any AI) read the answers later without this chat. `check_deck.py` warns when it is missing.
 - **A stable `id`.** Answers on the phone are kept by deck id plus card id. Rebuild with the same ids and the hooman keeps their work; change the deck id to start fresh.
 - **Masks are label images the same size as their image.** 0 is background, and every object has its own number. The app draws pixel-exact outlines, so a shifted or resized mask is visibly wrong. Never burn outlines into the image itself.
 - **Show the object in question.** Draw a model's full mask thin, then the same mask again with `value=<id>` and `style="bold"`. "Start from" in the editor then copies only the bold object. Also add `focus` so the card opens zoomed on it.

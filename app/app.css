@@ -374,6 +374,12 @@ ul.steps { padding-left: 18px; }
 .search .x { position: absolute; right: 3px; top: 50%; translate: 0 -50%; width: 40px; height: 40px; border: 0; border-radius: 10px; background: none; color: var(--muted); font-size: 15px; }
 .search-meta { margin: -4px 2px 8px; font-size: 12px; color: var(--muted); }
 .search-meta .link-btn { color: var(--focus); }
+.about { color: var(--text); font-size: 15px; line-height: 1.5; margin-top: 10px; }
+.about p { margin: 0 0 10px; }
+.about ul { margin: 0 0 10px; padding-left: 20px; }
+.about li { margin: 3px 0; }
+.about.mine { border-left: 3px solid var(--focus); padding-left: 10px; margin-top: 0; }
+.deckscreen .top h2 { cursor: pointer; }
 .start { display: grid; gap: 10px; margin: 16px 0; }
 .start .btn { min-height: 52px; }
 .start .link-btn { min-height: 44px; color: var(--focus); }

@@ -7,7 +7,7 @@ const SLOT_COLORS = { right: "#3ddc97", left: "#ff5d6c", up: "#f2c14e", down: "#
 const BUTTON_COLORS = ["#4fc3f7", "#ff8fab", "#c6ff3d", "#ffa94d", "#b9e3ff", "#e599f7"];
 export const DEFAULT_ANSWERS = { right: "Yes", left: "No", up: "Unsure" };
 
-const TOP = ["hooman", "id", "title", "question", "help", "answers", "buttons", "sources", "classes", "shuffle", "cards", "mode", "frames_are", "channels", "channel_view"];
+const TOP = ["hooman", "id", "title", "question", "help", "about", "answers", "buttons", "sources", "classes", "shuffle", "cards", "mode", "frames_are", "channels", "channel_view"];
 const CARD = ["id", "image", "frames", "question", "info", "focus", "overlays", "start", "channels"];
 export const THEN = ["draw", "point", "points", "number", "text"];
 const OVERLAY = ["box", "point", "polygon", "mask", "source", "label", "value", "style", "frame"];
@@ -65,7 +65,7 @@ export function normalizeDeck(raw, files, fileName = "deck") {
     const base = String(raw.title || fileName.replace(/(\.hooman)?\.(zip|json)$/i, "")).normalize("NFKD");
     id = base.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "deck";
   }
-  for (const k of ["title", "question", "help"]) if (raw[k] !== undefined && typeof raw[k] !== "string") err(`deck.json: "${k}" must be text`);
+  for (const k of ["title", "question", "help", "about"]) if (raw[k] !== undefined && typeof raw[k] !== "string") err(`deck.json: "${k}" must be text`);
   const title = isStr(raw.title) ? raw.title.trim() : id;
   let question = isStr(raw.question) ? raw.question.trim() : null;
   if (raw.mode !== undefined && !["swipe", "annotate", "follow"].includes(raw.mode)) err(`deck.json: "mode" must be "swipe", "annotate" or "follow"`);
@@ -308,7 +308,7 @@ export function normalizeDeck(raw, files, fileName = "deck") {
     { slot: "button", label: "Divides", value: "divides", color: "#b48cff" },
     { slot: "button", label: "Leaves view", value: "leaves", color: "#f2c14e" },
   ];
-  const deck = { hooman: FORMAT, id, title, question, mode, framesAre, ...(channels ? { channels, channelView } : {}), help: isStr(raw.help) ? raw.help : "", shuffle: !!raw.shuffle, answers: finalAnswers, sources, classes, cards };
+  const deck = { hooman: FORMAT, id, title, question, mode, framesAre, ...(channels ? { channels, channelView } : {}), help: isStr(raw.help) ? raw.help : "", about: isStr(raw.about) ? raw.about.trim() : "", shuffle: !!raw.shuffle, answers: finalAnswers, sources, classes, cards };
   return { deck, errors, warnings, paths };
 }
 

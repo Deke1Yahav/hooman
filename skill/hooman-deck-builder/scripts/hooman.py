@@ -140,7 +140,7 @@ def polygon(points, source="model", label=None, style=None, frame=None):
 class Deck:
     """Collects files and cards, then writes <name>.hooman.zip. Identical files are stored once."""
 
-    def __init__(self, id, question=None, title=None, *, mode=None, help=None, shuffle=False, frames_are=None):
+    def __init__(self, id, question=None, title=None, *, mode=None, help=None, about=None, shuffle=False, frames_are=None):
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", id or ""):
             raise ValueError('deck id: 1-64 letters, digits, ".", "_" or "-" (keep it stable across rebuilds)')
         self.data = {"hooman": 1, "id": id}
@@ -152,6 +152,8 @@ class Deck:
             self.data["mode"] = mode
         if help:
             self.data["help"] = help
+        if about:
+            self.data["about"] = about
         if shuffle:
             self.data["shuffle"] = True
         if frames_are:

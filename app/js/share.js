@@ -18,6 +18,7 @@ export function toDeckJSON(rec) {
     if (d.channelView !== 0 && d.channelView !== undefined) out.channel_view = typeof d.channelView === "number" ? d.channels[d.channelView].name : d.channelView;
   }
   if (d.help) out.help = d.help;
+  if (d.about) out.about = d.about;
   if (d.shuffle) out.shuffle = true;
   if (mode === "swipe") {
     const ans = (a) => {

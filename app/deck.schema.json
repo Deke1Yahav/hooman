@@ -28,6 +28,10 @@
       "type": "string",
       "maxLength": 5000
     },
+    "about": {
+      "type": "string",
+      "maxLength": 20000
+    },
     "answers": {
       "type": "object",
       "propertyNames": {
