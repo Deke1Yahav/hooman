@@ -142,18 +142,21 @@ const sizeMB = (n) => `${n >= 1e7 ? Math.round(n / 1e6) : (n / 1e6).toFixed(1)} 
 // What the home screen's search looks in: a deck's title, id, zip name and About (a waiting zip: its name).
 const deckQ = (d) => [d.title, d.key, dfolder.isOn() ? dfolder.zipOf(d.key) : "", d.deck.about, d.aboutNote].filter(Boolean).join(" ").toLowerCase();
 const zipQ = (a) => `${zipTitle(a.name)} ${a.name}`.toLowerCase();
-function deckRow(d, done) {
+// by: in a date order ("added", "opened", "updated"), the row says that date's time (the day is the heading above).
+function deckRow(d, done, by = "") {
   const n = d.deck.cards.length, pct = n ? (100 * done) / n : 0, lo = loadingOf(d.key);
   const zip = lo && !lo.active && dfolder.isOn() ? dfolder.zipOf(d.key) : "";
+  const when = by && dateOf(d, by);
   const sub = lo ? (lo.active ? "Saving to the phone…" : `<b class="warn">Not fully on the phone · ${zip ? "tap to finish" : "pick its zip again"}</b>`)
+    : by ? `${n && done >= n ? "Done" : done ? "Started" : `New · ${n} card${n === 1 ? "" : "s"}`}${when ? ` · ${by} ${hhmm(when)}` : ""}`
     : n && done >= n ? `Done${d.openedAt ? ` · opened ${whenShort(d.openedAt)}` : ""}`
     : done ? `Opened ${whenShort(d.openedAt || d.updatedAt)}` : `New · ${n} card${n === 1 ? "" : "s"}`;
-  return `<div class="deckitem" data-q="${esc(deckQ(d))}"><button class="deckrow" ${zip ? `data-act="finishzip" data-zip="${esc(zip)}"` : `data-open="${esc(d.key)}"`}>
+  return `<div class="deckitem" data-q="${esc(deckQ(d))}" data-date="${esc(dateOf(d, rangeBy()))}"><button class="deckrow" ${zip ? `data-act="finishzip" data-zip="${esc(zip)}"` : `data-open="${esc(d.key)}"`}>
       <b>${esc(d.title)}</b><span class="count">${n && done >= n ? "✓ " : ""}${done} / ${n}</span>
       <div class="pbar"><i style="width:${pct}%"></i></div><span class="sub">${sub}</span></button>
       <button class="rowmenu" data-act="rowmenu" data-key="${esc(d.key)}" aria-label="More for ${esc(d.title)}">⋮</button></div>`;
 }
-const cloudRow = (a) => `<div class="deckitem" data-q="${esc(zipQ(a))}"><button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
+const cloudRow = (a) => `<div class="deckitem" data-q="${esc(zipQ(a))}" data-date=""><button class="deckrow cloud" data-act="loadzip" data-zip="${esc(a.name)}">
       <b>${esc(zipTitle(a.name))}</b><span class="count">☁${a.size ? ` ${sizeMB(a.size)}` : ""}</span>
       <span class="sub">${a.update ? "A newer version is in your folder · tap to load" : "In your folder · tap to load"}</span></button>
       <button class="rowmenu" data-act="zipmenu" data-zip="${esc(a.name)}" aria-label="More for ${esc(zipTitle(a.name))}">⋮</button></div>`;
@@ -221,6 +224,68 @@ function folderLine() {
     ${s.fail ? `<button class="link-btn folder-log" data-act="folderlog">What happened</button>` : ""}`;
 }
 
+// How the home screen orders the decks (prefs "homeSort"). "smart": Continue (last opened first), then New (last
+// added first); the others are one list, under a heading per day for the dates.
+const SORTS = [["smart", "To do first", "decks you've started, then new ones"], ["added", "Newest added", ""], ["addedOld", "Oldest added", ""],
+               ["opened", "Recently opened", ""], ["updated", "Recently updated", "when its zip was last loaded"], ["name", "Name A–Z", ""]];
+const homeSort = () => { const s = prefs.get("homeSort", "smart"); return SORTS.some(([k]) => k === s) ? s : "smart"; };
+const dateOf = (d, by) => (by === "opened" ? d.openedAt : by === "updated" ? d.updatedAt || d.importedAt : d.importedAt || d.updatedAt) || "";
+function dayLabel(iso, by) {
+  if (!iso) return by === "opened" ? "Not opened yet" : "No date";
+  const d = new Date(iso), now = new Date(), days = Math.round((new Date(now.toDateString()) - new Date(d.toDateString())) / 864e5);
+  return days === 0 ? "Today" : days === 1 ? "Yesterday"
+    : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+}
+// Only the decks of a range of dates (prefs "homeRange": {kind: "today" | "7" | "30" | "custom", from, to}, dates as
+// "YYYY-MM-DD", either end open). The date is the one the list is ordered by; added for To do first and Name.
+const rangeBy = () => { const s = homeSort(); return s === "opened" || s === "updated" ? s : "added"; };
+const homeRange = () => { const r = prefs.get("homeRange", null); return r && r.kind ? r : null; };
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function rangeBounds(r) {                             // [first ms, last ms] of local days
+  if (!r) return null;
+  const day = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+  const today = new Date(new Date().toDateString());
+  if (r.kind === "custom") return [r.from ? +day(r.from) : -Infinity, r.to ? +day(r.to) + 864e5 - 1 : Infinity];
+  const back = { today: 0, 7: 6, 30: 29 }[r.kind];
+  return back === undefined ? null : [+today - back * 864e5, Infinity];
+}
+function rangeWords(r) {
+  if (!r) return "";
+  if (r.kind !== "custom") return { today: "today", 7: "in the last 7 days", 30: "in the last 30 days" }[r.kind] || "";
+  const f = (s) => new Date(`${s}T12:00:00`).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+  return r.from && r.to ? `from ${f(r.from)} to ${f(r.to)}` : r.from ? `since ${f(r.from)}` : r.to ? `until ${f(r.to)}` : "";
+}
+const inRange = (iso, b) => !b || (!!iso && Date.parse(iso) >= b[0] && Date.parse(iso) <= b[1]);
+
+// Order and dates, in one sheet: an order applies at once; a range too ("Pick dates…" opens two date fields).
+function sortSheet() {
+  const cur = homeSort(), r = homeRange(), by = rangeBy();
+  const kinds = [["", "Any time"], ["today", "Today"], ["7", "7 days"], ["30", "30 days"], ["custom", "Pick dates…"]];
+  const sh = openSheet(`<h3>Order the decks</h3><div class="menu sort-menu">${SORTS.map(([k, label, sub]) => `<button class="btn quiet${k === cur ? " on" : ""}" data-s="${k}" aria-pressed="${k === cur}">${k === cur ? "✓ " : ""}${esc(label)}${sub ? `<small>${esc(sub)}</small>` : ""}</button>`).join("")}</div>
+    <div class="section-title" style="margin:18px 0 8px">Only decks ${by}</div>
+    <div class="range-kinds">${kinds.map(([k, label]) => `<button class="btn quiet${(r ? r.kind : "") === k ? " on" : ""}" data-r="${k}" aria-pressed="${(r ? r.kind : "") === k}">${label}</button>`).join("")}</div>
+    <div class="range-custom" id="range-custom"${r && r.kind === "custom" ? "" : " hidden"}>
+      <label>From <input type="date" id="range-from" value="${esc((r && r.from) || "")}"></label>
+      <label>To <input type="date" id="range-to" value="${esc((r && r.to) || ymd(new Date()))}"></label>
+      <button class="btn" data-r="apply">Show these dates</button>
+    </div>`);
+  const setRange = (v) => { prefs.set("homeRange", v); sh.close(); home(); };
+  sh.el.onclick = (e) => {
+    const s = e.target.closest("[data-s]");
+    if (s) { prefs.set("homeSort", s.dataset.s); sh.close(); return home(); }
+    const b = e.target.closest("[data-r]");
+    if (!b) return;
+    const k = b.dataset.r;
+    if (k === "custom") { $("#range-custom", sh.el).hidden = false; $$(".range-kinds .btn", sh.el).forEach((x) => x.classList.toggle("on", x === b)); return; }
+    if (k === "apply") {
+      let from = $("#range-from", sh.el).value, to = $("#range-to", sh.el).value;
+      if (from && to && from > to) [from, to] = [to, from];
+      return setRange(from || to ? { kind: "custom", from, to } : null);
+    }
+    setRange(k ? { kind: k } : null);
+  };
+}
+
 async function home() {
   const decks = await store.listDecks();
   const all = await Promise.all(decks.map((d) => store.answersOf(d.key)));
@@ -239,17 +304,37 @@ async function home() {
   const opened = (x, y) => (y.openedAt || y.updatedAt || "").localeCompare(x.openedAt || x.updatedAt || "");
   const arrived = (x, y) => (y.importedAt || y.updatedAt || "").localeCompare(x.importedAt || x.updatedAt || "");
   const going = active.filter((d) => counts.get(d.key) > 0).sort(opened), fresh = active.filter((d) => !counts.get(d.key)).sort(arrived);
-  const row = (d) => deckRow(d, counts.get(d.key));
-  const list = tab === "archive" ? archived.sort(opened).map(row).join("")
-    : (going.length && fresh.length + avail.length ? `<div class="list-div">Continue</div>` : "") + going.map(row).join("")
-      + (going.length && fresh.length + avail.length ? `<div class="list-div">New</div>` : "") + fresh.map(row).join("") + avail.map(cloudRow).join("");
+  const sort = homeSort(), by = sort === "addedOld" ? "added" : sort === "smart" || sort === "name" ? "" : sort;
+  const row = (d) => deckRow(d, counts.get(d.key), by);
+  let list;
+  if (sort === "smart") {
+    list = tab === "archive" ? archived.sort(opened).map(row).join("")
+      : (going.length && fresh.length + avail.length ? `<div class="list-div">Continue</div>` : "") + going.map(row).join("")
+        + (going.length && fresh.length + avail.length ? `<div class="list-div">New</div>` : "") + fresh.map(row).join("") + avail.map(cloudRow).join("");
+  } else {
+    const byName = (x, y) => x.title.localeCompare(y.title, undefined, { numeric: true, sensitivity: "base" });
+    const sorted = (tab === "archive" ? archived : active).slice()
+      .sort(by ? (x, y) => dateOf(y, by).localeCompare(dateOf(x, by)) * (sort === "addedOld" ? -1 : 1) || byName(x, y) : byName);
+    let last = null;
+    list = sorted.map((d) => {
+      const h = by ? dayLabel(dateOf(d, by), by) : null, head = h !== null && h !== last ? `<div class="list-div">${esc(h)}</div>` : "";
+      last = h;
+      return head + row(d);
+    }).join("");
+    if (tab === "decks" && avail.length) {             // zips not loaded yet have no such date: by name, after the decks
+      list += `<div class="list-div">In your folder · tap to load</div>` + avail.slice().sort((x, y) => zipTitle(x.name).localeCompare(zipTitle(y.name), undefined, { numeric: true })).map(cloudRow).join("");
+    }
+  }
   // The search (4 decks or more) filters this tab's rows as each letter is typed (filterHome); it also counts
   // matches in the other tab, one tap away.
   const searchable = !newcomer && decks.length + avail.length >= 4;
-  homeOther = tab === "archive" ? { tab: "decks", label: "To do", qs: [...active.map(deckQ), ...avail.map(zipQ)] }
-    : { tab: "archive", label: "the Archive", qs: archived.map(deckQ) };
-  const tabsHTML = nArch ? `<div class="tabs-row"><span class="seg tabs"><button data-act="tab" data-tab="decks" aria-pressed="${tab === "decks"}">To do (${nTodo})</button><button data-act="tab" data-tab="archive" aria-pressed="${tab === "archive"}">Archive (${nArch})</button></span></div>`
-    : `<div class="section-title">To do${nTodo ? ` (${nTodo})` : ""}</div>`;
+  const item = (d) => ({ q: deckQ(d), date: dateOf(d, rangeBy()) });
+  homeOther = tab === "archive" ? { tab: "decks", label: "To do", items: [...active.map(item), ...avail.map((a) => ({ q: zipQ(a), date: "" }))] }
+    : { tab: "archive", label: "the Archive", items: archived.map(item) };
+  const sortLabel = SORTS.find(([k]) => k === sort)[1], range = homeRange();
+  const sortBtn = decks.length + avail.length >= 2 || range ? `<button class="sort-btn${range ? " on" : ""}" data-act="sort" aria-label="Order and dates (now: ${esc(sortLabel)}${range ? `, ${esc(rangeWords(range))}` : ""})">↕ ${esc(sortLabel)}${range ? " · 📅" : ""}</button>` : "";
+  const tabsHTML = `<div class="tabs-row list-head">${nArch ? `<span class="seg tabs"><button data-act="tab" data-tab="decks" aria-pressed="${tab === "decks"}">To do (${nTodo})</button><button data-act="tab" data-tab="archive" aria-pressed="${tab === "archive"}">Archive (${nArch})</button></span>`
+    : `<div class="section-title">To do${nTodo ? ` (${nTodo})` : ""}</div>`}${sortBtn}</div>`;
   const listHTML = list ? `<div class="decks">${list}</div>`
     : `<div class="empty">${tab === "decks" ? `<b>All done.</b> Finished decks are in the Archive.${folderOn ? ` New zips put in “${esc(dfolder.folderName())}” show up here.` : ""}` : "Nothing archived."}</div>`;
   // Typing in the search while the list is redrawn (the decks folder, a deck saved): only the list changes, so the
@@ -277,12 +362,13 @@ async function home() {
       <button class="link-btn" data-videos>▶ Watch the ${GUIDE_VIDEOS[0].min} video guide</button>
     </div>` : `
     <div id="home-tabs">${tabsHTML}</div>
+    ${range ? `<div class="range-chip" id="range-chip"><span>📅 Decks ${rangeBy()} ${esc(rangeWords(range))}</span><button class="x" data-act="clearrange" aria-label="Show every date">✕</button></div>` : ""}
     ${searchable ? `<div class="search" role="search">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
       <input type="search" id="deck-search" placeholder="Search decks" value="${esc(homeQuery)}" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Search decks">
       <button class="x" id="search-x" data-act="clearsearch" aria-label="Clear the search" hidden>✕</button>
     </div>
-    <p class="search-meta" id="search-meta" hidden></p>` : ""}
+    <p class="search-meta" id="search-meta" hidden></p>` : range ? `<p class="search-meta" id="search-meta" hidden></p>` : ""}
     <div id="home-list">${listHTML}</div>
     ${tab === "decks" ? `<button class="btn quiet add-deck" data-act="add">+ Add a deck</button>` : ""}`}
     <p class="foot-note">Stays on this device · <button class="link-btn" data-act="help">Help</button> · v${APP_VERSION}</p>
@@ -291,6 +377,7 @@ async function home() {
   const file = $("#file");
   file.addEventListener("change", () => { const f = file.files[0]; file.value = ""; if (f) importFile(f); });
   const search = $("#deck-search");
+  if (!search) filterHome();                        // a range of dates, without the search box
   if (search) {
     search.addEventListener("input", () => { homeQuery = search.value; filterHome(); });
     search.addEventListener("keydown", (e) => {
@@ -308,25 +395,27 @@ async function home() {
     if (!b) return;
     if (b.dataset.open) return go(`#/deck/${encodeURIComponent(b.dataset.open)}`);
     if (b.dataset.act === "tab") { prefs.set("homeTab", b.dataset.tab); return home(); }
+    if (b.dataset.act === "clearrange") { prefs.set("homeRange", null); return home(); }
     if (b.dataset.act === "clearsearch") { homeQuery = ""; const s = $("#deck-search"); if (s) { s.value = ""; s.focus(); } return filterHome(); }
     ({ import: () => file.click(), link: linkSheet, ai: aiSheet, examples: examplesSheet, settings: settingsSheet, backup: () => backupNow(false),
        photos: photosSheet, drive: openFromDrive, install: installFlow, installno: () => { prefs.set("installNo", true); home(); },
        repick: pickZipAgain, checkdecks: decksCheckNow, stopcheck: () => dfolder.stop(), folderrors: () => decksAction("errors"), folderlog: folderLog,
        loadzip: () => loadZip(b.dataset.zip), finishzip: () => loadZip(b.dataset.zip, true), connect: () => decksAction("on"),
-       add: addSheet, help: appHelp, rowmenu: () => rowMenu(b.dataset.key), zipmenu: () => zipMenu(b.dataset.zip) })[b.dataset.act]();
+       add: addSheet, help: appHelp, rowmenu: () => rowMenu(b.dataset.key), zipmenu: () => zipMenu(b.dataset.zip), sort: sortSheet })[b.dataset.act]();
   };
 }
 
 // The home screen's search: kept while the app is open (also after opening a deck and coming back). Every word typed
 // must appear in a row's title, id or zip name, in any order and case ("abswin mix" finds fx2_abswin_mix_flow).
-let homeQuery = "", homeOther = { tab: "archive", label: "the Archive", qs: [] };
+let homeQuery = "", homeOther = { tab: "archive", label: "the Archive", items: [] };
 function filterHome() {
   const box = $("#home-list"), meta = $("#search-meta"), x = $("#search-x");
   if (!box) return;
-  const words = homeQuery.toLowerCase().split(/\s+/).filter(Boolean), hit = (q) => words.every((w) => q.includes(w));
+  const words = homeQuery.toLowerCase().split(/\s+/).filter(Boolean), range = homeRange(), bounds = rangeBounds(range);
+  const hit = (q, date) => words.every((w) => q.includes(w)) && inRange(date, bounds);
   const items = $$(".deckitem", box);
   let shown = 0;
-  items.forEach((it) => { it.hidden = !hit(it.dataset.q || ""); if (!it.hidden) shown++; });
+  items.forEach((it) => { it.hidden = !hit(it.dataset.q || "", it.dataset.date || ""); if (!it.hidden) shown++; });
   $$(".list-div", box).forEach((div) => {          // "Continue" / "New" only above rows still shown
     let any = false;
     for (let n = div.nextElementSibling; n && !n.classList.contains("list-div"); n = n.nextElementSibling) if (!n.hidden) { any = true; break; }
@@ -334,9 +423,9 @@ function filterHome() {
   });
   if (x) x.hidden = !homeQuery;
   if (!meta) return;
-  const more = words.length ? homeOther.qs.filter(hit).length : 0;
-  meta.hidden = !words.length;
-  meta.innerHTML = !words.length ? "" : `${shown ? `${shown} of ${items.length}` : `Nothing here matches “${esc(homeQuery.trim())}”`}${
+  const on = words.length || bounds, more = on ? homeOther.items.filter((x) => hit(x.q, x.date)).length : 0;
+  meta.hidden = !on;
+  meta.innerHTML = !on ? "" : `${shown ? `${shown} of ${items.length}` : words.length ? `Nothing here matches “${esc(homeQuery.trim())}”${bounds ? ` ${esc(rangeWords(range))}` : ""}` : `No decks ${rangeBy()} ${esc(rangeWords(range))}`}${
     more ? ` · <button class="link-btn" data-act="tab" data-tab="${homeOther.tab}">${more} more in ${homeOther.label}</button>` : ""}`;
 }
 
@@ -1170,30 +1259,35 @@ async function answer(def, from) {
   if (def.then === "draw") {
     snapBack();
     drawn = await drawFor(card, prev, def.label, "draw the right mask");
+    if (!S) return;                                // left the deck meanwhile
     if (!drawn) { S.busy = false; return; }   // cancelled: no answer
   } else if (def.then === "point" || def.then === "points") {
     snapBack(); stopPlay();
     const r = await openTapper({ rec: S.rec, card, frame: S.frame, hidden: new Set(S.hidden), multi: def.then === "points", title: def.label, cview: S.cview, chan: S.chan,
       note: def.then === "points" ? "tap each point" : "tap the spot", color: def.color });
+    if (!S) return;
     if (!r) { S.busy = false; return; }
     extra = { points: r.points };
   } else if (def.then === "number" || def.then === "text") {
     snapBack();
     const v = await askValue(def, prev);
+    if (!S) return;
     if (v === null) { S.busy = false; return; }
     extra = def.then === "number" ? { number: v } : { text: v };
   }
-  if (!(await saveAnswer(card, def, prev, drawn, extra))) return;
+  if (!(await saveAnswer(card, def, prev, drawn, extra)) || !S) return;
   if (def.celebrate) blast(def.color);
   await flyOut(def, drawn || extra ? null : from);
+  if (!S) return;                                  // left the deck while the card flew out (the answer is saved)
   S.busy = false;
   advance();
 }
 
 async function saveAnswer(card, def, prev, drawn, extra) {
+  const s = S;                                     // this deck, even if the hooman leaves it while the answer is saved
   try {
     const at = new Date().toISOString();
-    const rec = { answer: def.value, label: def.label, at, ms: Math.round(performance.now() - (S.shownAt || performance.now())), changes: prev ? (prev.changes || 0) + 1 : 0 };
+    const rec = { answer: def.value, label: def.label, at, ms: Math.round(performance.now() - (s.shownAt || performance.now())), changes: prev ? (prev.changes || 0) + 1 : 0 };
     if (annotator()) rec.by = annotator();
     if (drawn) {
       if (drawn.masks) rec.masks = drawn.masks; else rec.mask = drawn.mask;
@@ -1201,15 +1295,15 @@ async function saveAnswer(card, def, prev, drawn, extra) {
       if (drawn.from && drawn.from.length) rec.from = drawn.from;
     }
     if (extra) Object.assign(rec, extra);
-    await store.setAnswer(S.key, card.id, rec, { answer: def.value, at, ...(drawn ? { objects: drawn.count } : {}) });
-    S.answers.set(card.id, { ...rec, deck: S.key, card: card.id });
-    S.stack.push({ card: card.id, prev });
+    await store.setAnswer(s.key, card.id, rec, { answer: def.value, at, ...(drawn ? { objects: drawn.count } : {}) });
+    s.answers.set(card.id, { ...rec, deck: s.key, card: card.id });
+    s.stack.push({ card: card.id, prev });
     return true;
   } catch (e) {
     console.error(e);
     toast(`Could not save the answer: ${e.message}`, 4000);
-    S.busy = false;
-    snapBack();
+    s.busy = false;
+    if (S === s) snapBack();
     return false;
   }
 }
@@ -1253,6 +1347,7 @@ async function followCard() {
   const prev = S.answers.get(card.id) || null;
   const pos = S.order.indexOf(card.id) + 1;
   const r = await openFollow({ rec: S.rec, card, hidden: new Set(S.hidden), title: S.rec.deck.title, note: `card ${pos} of ${S.order.length}`, cview: S.cview, chan: S.chan });
+  if (!S) return;
   if (!r) { S.busy = false; S.autoEdit = false; return; }
   if (r.skip) {
     S.busy = false;
@@ -1261,7 +1356,7 @@ async function followCard() {
     return showCard();
   }
   const def = S.rec.deck.answers.find((d) => d.value === r.end) || { value: r.end, label: r.end, slot: "button" };
-  if (!(await saveAnswer(card, def, prev, null, { points: r.points, end: r.end }))) return;
+  if (!(await saveAnswer(card, def, prev, null, { points: r.points, end: r.end })) || !S) return;
   S.busy = false;
   S.autoEdit = true;
   advance();
@@ -1306,11 +1401,12 @@ async function annotateCard() {
   const prev = S.answers.get(card.id) || null;
   const pos = S.order.indexOf(card.id) + 1;
   const drawn = await drawFor(card, prev, S.rec.deck.title, `card ${pos} of ${S.order.length}`, "Save");
+  if (!S) return;
   if (!drawn) { S.busy = false; S.autoEdit = false; return; }
   const def = drawn.count
     ? { value: "annotated", label: `${drawn.count} object${drawn.count > 1 ? "s" : ""}`, slot: "button" }
     : { value: "empty", label: "Nothing to mark", slot: "button" };
-  if (!(await saveAnswer(card, def, prev, drawn))) return;
+  if (!(await saveAnswer(card, def, prev, drawn)) || !S) return;
   S.busy = false;
   S.autoEdit = true;
   advance();
@@ -1333,7 +1429,7 @@ async function undo() {
     if (prev) S.answers.set(entry.card, { ...prev, deck: S.key, card: entry.card }); else S.answers.delete(entry.card);
     S.pos = S.order.indexOf(entry.card);
     toast(prev ? `Back to “${prev.label}”` : "Undone");
-  } finally { S.busy = false; }
+  } finally { if (S) S.busy = false; }
   showCard();
 }
 
