@@ -121,7 +121,8 @@ async function saveRec(rec) {
   if (!rec) return;
   const raw = await store.getDeck(rec.key);
   if (!raw) return;
-  for (const k of ["openedAt", "lastCard", "exportedAt", "order", "shelf"]) if (rec[k] !== undefined) raw[k] = rec[k];
+  for (const k of ["openedAt", "lastCard", "exportedAt", "order", "shelf", "aboutSeen"]) if (rec[k] !== undefined) raw[k] = rec[k];
+  if ("aboutNote" in rec) { if (rec.aboutNote) raw.aboutNote = rec.aboutNote; else delete raw.aboutNote; }   // the hooman's notes (cleared too)
   raw.custom = rec._raw && rec.custom && rec.custom.answers ? { ...rec.custom, answers: rec.custom.answers.map((a) => ({ ...a, color: untone(a.color) })) } : rec.custom;
   return store.putDeck(raw);
 }
@@ -138,8 +139,8 @@ const whenShort = (iso) => {
 };
 const zipTitle = (name) => name.split("/").pop().replace(/\.hooman\.zip$|\.zip$/i, "");
 const sizeMB = (n) => `${n >= 1e7 ? Math.round(n / 1e6) : (n / 1e6).toFixed(1)} MB`;
-// What the home screen's search looks in: a deck's title, id and zip name (a waiting zip: its name).
-const deckQ = (d) => [d.title, d.key, dfolder.isOn() ? dfolder.zipOf(d.key) : ""].filter(Boolean).join(" ").toLowerCase();
+// What the home screen's search looks in: a deck's title, id, zip name and About (a waiting zip: its name).
+const deckQ = (d) => [d.title, d.key, dfolder.isOn() ? dfolder.zipOf(d.key) : "", d.deck.about, d.aboutNote].filter(Boolean).join(" ").toLowerCase();
 const zipQ = (a) => `${zipTitle(a.name)} ${a.name}`.toLowerCase();
 function deckRow(d, done) {
   const n = d.deck.cards.length, pct = n ? (100 * done) / n : 0, lo = loadingOf(d.key);
@@ -165,6 +166,7 @@ async function rowMenu(key) {
   const sh = openSheet(`<h3>${esc(rec.title)}</h3><p class="mono muted" style="font-size:12px;margin:-4px 0 0">${esc(key)}</p>
     <div class="menu">
       <button class="btn quiet" data-r="open">Open</button>
+      <button class="btn quiet" data-r="about">About this deck</button>
       ${zip ? `<button class="btn quiet" data-r="update">Update from the folder<small>downloads ${esc(zip.split("/").pop())} to see if it changed; answers are kept</small></button>` : ""}
       <button class="btn quiet" data-r="shelf">${archived ? "Back to To do" : "Move to archive"}</button>
       <button class="btn danger" data-r="delete">Delete from this phone</button>
@@ -173,6 +175,7 @@ async function rowMenu(key) {
     const r = e.target.closest("[data-r]");
     if (!r) return;
     if (r.dataset.r === "open") { sh.close(); return go(`#/deck/${encodeURIComponent(key)}`); }
+    if (r.dataset.r === "about") return aboutSheet(rec);
     if (r.dataset.r === "update") { sh.close(); return loadZip(zip, false, true); }
     if (r.dataset.r === "delete") return deleteSheet(rec);
     rec.shelf = archived ? "active" : "archive"; await saveRec(rec);
@@ -841,6 +844,7 @@ async function openDeck(key, params) {
   buildDeckScreen();
   showCard();
   if (!prefs.get("toured", false)) tourSheet();
+  else if (rec.deck.about && rec.aboutSeen !== textSig(rec.deck.about)) { rec.aboutSeen = textSig(rec.deck.about); saveRec(rec); aboutSheet(rec, { first: true }); }
 }
 
 // The channel view a deck opens in: the hooman's last choice, else the deck's "channel_view", else channel 1.
@@ -865,7 +869,7 @@ function buildDeckScreen() {
   app.innerHTML = `<main class="screen deckscreen">
     <div class="top">
       <button class="ghost" data-act="back">‹ ${S.revisit ? "Back" : "Decks"}</button>
-      <h2>${esc(deck.title)}</h2>
+      <h2 data-act="about" role="button" tabindex="0" aria-label="About this deck: ${esc(deck.title)}">${esc(deck.title)}</h2>
       <span class="count" id="count"></span>
       <button class="loadmark" id="loadmark" data-act="loadinfo" hidden></button>
       <button class="live-mark" id="live-mark" data-act="live" hidden></button>
@@ -1432,6 +1436,7 @@ function onDeckClick(e) {
   if (act === "caption") return captionSheet();
   if (act === "skip") { const c = currentCard(); if (c) { S.pos = nextUnanswered(S.pos); if (S.order[S.pos] === c.id) toast("This is the last open card"); showCard(); } return; }
   if (act === "menu") return deckMenu();
+  if (act === "about") return aboutSheet(S.rec);
   if (act === "live") return liveTap();
   if (act === "repick") return pickZipAgain();
   if (act === "finishzip") return loadZip(t.dataset.zip, true);
@@ -1515,6 +1520,7 @@ const isArchived = (rec, answered) => rec.shelf === "archive" || (rec.shelf !== 
 function deckMenu() {
   const sh = openSheet(`<h3>${esc(S.rec.title)}</h3><p class="mono muted" style="font-size:12px;margin:-4px 0 0">${esc(S.rec.key)}</p>
     <div class="menu">
+      <button class="btn quiet" data-m="about">About this deck</button>
       <button class="btn quiet" data-m="results">Results</button>
       <button class="btn quiet" data-m="review">Review and change answers</button>
       ${modeOf(S.rec.deck) === "swipe" ? `<button class="btn quiet" data-m="edit">Edit the answer buttons</button>` : ""}
@@ -1539,6 +1545,7 @@ function deckMenu() {
       edit: () => answerEditor(rec),
       export: () => exportSheet(rec),
       help: () => helpSheet(rec),
+      about: () => aboutSheet(rec),
       shelf: async () => {
         const back = isArchived(rec, S.answers.size);
         rec.shelf = back ? "active" : "archive"; await saveRec(rec);
@@ -1580,6 +1587,52 @@ function tourSheet() {
     ${guideHTML(S.rec)}
     <div class="stack"><button class="btn" data-go>Let's go</button></div>`, { onClose: () => prefs.set("toured", true) });
   sh.el.onclick = (e) => { if (e.target.closest("[data-go]")) { setAnnotator($("#tour-name", sh.el).value); sh.close(); } };
+}
+
+// ---------------------------------------------------------------- about a deck
+// What the deck is, in full: its "about" (deck.json, from whoever made it), with the hooman's own notes under it
+// (rec.aboutNote: on this phone, kept when the deck is updated). Plain text: a blank line starts a paragraph,
+// "- " a bullet, **bold**.
+function richText(t) {
+  const out = [], inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  let para = [], list = [];
+  const endPara = () => { if (para.length) out.push(`<p>${para.map(inline).join("<br>")}</p>`); para = []; };
+  const endList = () => { if (list.length) out.push(`<ul>${list.map((l) => `<li>${inline(l)}</li>`).join("")}</ul>`); list = []; };
+  for (const line of String(t || "").split("\n")) {
+    const m = line.match(/^\s*[-•*]\s+(.*)$/);
+    if (!line.trim()) { endPara(); endList(); } else if (m) { endPara(); list.push(m[1]); } else { endList(); para.push(line.trim()); }
+  }
+  endPara(); endList();
+  return out.join("");
+}
+const textSig = (t) => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return `${t.length}:${h}`; };
+async function aboutSheet(rec, { first = false } = {}) {
+  const deck = rec.deck, n = deck.cards.length, done = (await store.answersOf(rec.key)).length;
+  const zip = dfolder.isOn() ? dfolder.zipOf(rec.key) : "";
+  const facts = [`${n} card${n === 1 ? "" : "s"}`, `${done} answered`, rec.updatedAt ? `updated ${whenShort(rec.updatedAt)}` : "", zip ? zip.split("/").pop() : ""].filter(Boolean).join(" · ");
+  const paint = (editing) => `<h3>${esc(rec.title)}</h3><p class="mono muted" style="font-size:12px;margin:-4px 0 0">${esc(rec.key)} · ${esc(facts)}</p>
+    <div class="about">${deck.about ? richText(deck.about)
+      : `<p class="muted">This deck came without a description. Whoever made it can add one (<span class="mono">"about"</span> in deck.json); your own notes go below.</p>`}</div>
+    <div class="section-title" style="margin:16px 0 6px">Your notes</div>
+    ${editing ? `<textarea id="about-note" rows="5" placeholder="What this deck is for you: where it came from, what to watch for…">${esc(rec.aboutNote || "")}</textarea>`
+      : rec.aboutNote ? `<div class="about mine">${richText(rec.aboutNote)}</div>` : `<p class="muted" style="margin:0">None yet.</p>`}
+    <div class="row">${editing ? `<button class="btn" data-a="save">Save</button><button class="btn quiet" data-a="cancel">Cancel</button>`
+      : `${first ? `<button class="btn" data-a="close">Start</button>` : ""}<button class="btn quiet" data-a="edit">${rec.aboutNote ? "Edit my notes" : "Add my notes"}</button>${first ? "" : `<button class="btn quiet" data-a="close">Close</button>`}`}</div>`;
+  const sh = openSheet(paint(false));
+  sh.el.onclick = async (e) => {
+    const a = e.target.closest("[data-a]");
+    if (!a) return;
+    if (a.dataset.a === "close") return sh.close();
+    if (a.dataset.a === "edit") { sh.el.innerHTML = paint(true); $("#about-note", sh.el).focus(); return; }
+    if (a.dataset.a === "cancel") { sh.el.innerHTML = paint(false); return; }
+    if (a.dataset.a === "save") {
+      rec.aboutNote = $("#about-note", sh.el).value.trim() || undefined;
+      await saveRec(rec);
+      if (S && S.key === rec.key) S.rec.aboutNote = rec.aboutNote;
+      sh.el.innerHTML = paint(false); toast("Saved");
+      if (!S && parseHash().page === "home") home();
+    }
+  };
 }
 
 function deleteSheet(rec) {

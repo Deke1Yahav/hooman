@@ -268,6 +268,8 @@ export async function saveDeck(imported, mode, existing) {
     drive: mode === "update" && existing ? existing.drive : undefined,
     importedAt: mode === "update" && existing ? existing.importedAt : now, updatedAt: now,
     custom: mode === "update" && existing ? existing.custom : undefined,
+    aboutNote: mode === "update" && existing ? existing.aboutNote : undefined,     // the hooman's notes on the deck
+    aboutSeen: mode === "update" && existing ? existing.aboutSeen : undefined,
     order: mode === "update" && existing && existing.order && deck.shuffle ? mergeOrder(existing.order, deck) : makeOrder(deck),
   };
   await store.putDeck(rec);
