@@ -214,6 +214,7 @@ def main():
           await new Promise((res) => { const tx = d.transaction(["decks", "archives"], "readwrite"); tx.objectStore("decks").put(rec); tx.objectStore("archives").delete("folder-big"); tx.oncomplete = res; }); }""")
         page.reload(); page.wait_for_selector(".hero"); page.wait_for_timeout(800)
         page.goto(base + "#/deck/folder-big?card=c300"); page.wait_for_selector(".card-note", timeout=20000)
+        page.wait_for_function("() => { const n = document.querySelector('.card-note'); return n && !/Loading this card/.test(n.innerText); }", timeout=20000)   # after "Loading this card…"
         note = page.locator(".card-note").inner_text()
         check("can't be shown" not in note and "isn't on the phone yet" in note and page.locator(".card-note [data-act=finishzip]").count() == 1,
               f"not 'can't be shown' any more: the card offers Finish now ({note.splitlines()[0]!r})")

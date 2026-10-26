@@ -357,6 +357,20 @@ ul.steps { padding-left: 18px; }
 .activity { list-style: none; padding: 0; margin: 10px 0; max-height: 40vh; overflow-y: auto; display: grid; gap: 4px; }
 .activity li { font: 12px/1.45 var(--mono); color: var(--muted); background: var(--card); padding: 6px 8px; border-radius: 4px; word-break: break-word; }
 .tabs-row { margin: 18px 0 8px; }
+.list-head { display: flex; align-items: center; gap: 8px; }
+.list-head .section-title { margin: 0; }
+.sort-btn { margin-left: auto; flex: none; min-height: 40px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); font-size: 13px; white-space: nowrap; }
+.sort-menu .btn.on, .range-kinds .btn.on { border-color: var(--focus); color: var(--focus); }
+.sort-btn.on { border-color: var(--focus); color: var(--focus); }
+.range-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.range-kinds .btn { min-height: 40px; padding: 0 12px; font-size: 13px; flex: 1 0 auto; }
+.range-custom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.range-custom label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.range-custom input { min-height: 44px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 0 8px; font-size: 15px; color-scheme: dark; }
+.range-custom .btn { grid-column: 1 / -1; }
+.range-chip { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 4px 4px 4px 12px; border: 1px solid var(--focus); border-radius: 12px; color: var(--text); font-size: 13px; }
+.range-chip span { flex: 1; min-width: 0; }
+.range-chip .x { flex: none; width: 40px; height: 36px; border: 0; background: none; color: var(--muted); font-size: 15px; }
 .seg.tabs button { min-height: 44px; padding: 0 16px; font-size: 13px; }
 .list-div { font: 500 11px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin: 8px 2px 0; }
 .deckrow .sub .warn { color: var(--yellow); font-weight: 500; }

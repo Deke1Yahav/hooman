@@ -1,6 +1,6 @@
 """End-to-end checks for 0.10's Archive tab: finished decks move there by themselves, the deck menu moves a deck
 either way, and the home screen remembers the tab. 0.13: the home screen's search filters the list as each letter is
-typed. 0.14: About this deck (deck.json "about" and the hooman's own notes).
+typed. 0.14: About this deck (deck.json "about" and the hooman's own notes). 0.15: the decks in order of date or name.
 
     python tests/e2e_v10.py           # screenshots go to tests/out/
 """
@@ -167,6 +167,76 @@ def main():
         check(page.locator(".sheet").count() == 0, "a deck without an About opens straight to its cards")
         page.locator("[data-act=menu]").click(); page.locator(".sheet [data-m=about]").click(); page.locator(".sheet .about").first.wait_for()
         check("came without a description" in page.locator(".sheet").inner_text(), "its About says it came without one, and offers my notes")
+        page.keyboard.press("Escape")
+
+        print("The decks in order of date or name")
+        # one deck added long ago, so the days differ
+        page.evaluate("""async () => { const d = await new Promise((res) => { const r = indexedDB.open("hooman"); r.onsuccess = () => res(r.result); });
+          const rec = await new Promise((res) => { const q = d.transaction("decks").objectStore("decks").get("divisions-train-v1"); q.onsuccess = () => res(q.result); });
+          rec.importedAt = "2026-01-05T09:30:00.000Z";
+          await new Promise((res) => { const tx = d.transaction("decks", "readwrite"); tx.objectStore("decks").put(rec); tx.oncomplete = res; }); }""")
+        page.goto(base + "#/"); page.reload(); page.wait_for_selector(".hero")
+        titles = lambda: [r.locator("b").first.inner_text() for r in page.locator("#home-list .deckitem:visible .deckrow").all()]
+        heads = lambda: [h.inner_text() for h in page.locator("#home-list .list-div:visible").all()]
+        def order(label):
+            page.locator("[data-act=sort]").click(); page.locator(".sheet .sort-menu").wait_for()
+            page.locator(".sheet [data-s]", has_text=label).click(); page.wait_for_timeout(300)
+        check("To do first" in page.locator("[data-act=sort]").inner_text(), "the list starts as To do first (started decks, then new ones)")
+        order("Oldest added")
+        t, h = titles(), heads()
+        check(t[0].startswith("Divisions") and t[1].startswith("Verify fx2") and "Jan" in h[0].title() and h[1].upper() == "TODAY",
+              f"Oldest added: the oldest first, under a heading per day ({t[:3]}, {h})")
+        check("added" in page.locator("#home-list .deckrow .sub").first.inner_text(), "each row says when it was added")
+        page.screenshot(path=OUT / "104_order_oldest.png")
+        order("Newest added")
+        check(titles()[0] == "Fins deck" and titles()[-1].startswith("Divisions"), f"Newest added: the last one added first ({titles()})")
+        order("Recently updated")
+        check(titles()[0] == "Fins deck", "Recently updated: the deck whose zip was loaded last")
+        order("Name A–Z")
+        t = titles()
+        check(t == sorted(t, key=str.lower) and heads() == [], f"Name A–Z, no headings ({t})")
+        page.reload(); page.wait_for_selector(".hero")
+        check("Name A–Z" in page.locator("[data-act=sort]").inner_text() and titles() == t, "the order is kept")
+        order("Oldest added")
+        page.locator("#deck-search").fill("verify"); page.wait_for_timeout(100)
+        check(len(titles()) == 2 and [x.upper() for x in heads()] == ["TODAY"], f"search works in a date order, and days with no match hide ({heads()})")
+        page.locator("#search-x").click()
+        page.locator("[data-tab=archive]").click(); page.wait_for_timeout(300)
+        check(len(titles()) == 1 and "Model A" in titles()[0] and len(heads()) == 1, f"the Archive is in the same order ({titles()}, {heads()})")
+        page.locator("[data-tab=decks]").click(); page.wait_for_timeout(300)
+        order("To do first")
+        check([x.upper() for x in heads()] == ["CONTINUE", "NEW"], f"To do first brings back Continue and New ({heads()})")
+
+        print("Only the decks of a range of dates")
+        def dates(label):
+            page.locator("[data-act=sort]").click(); page.locator(".sheet .range-kinds").wait_for()
+            page.locator(".sheet [data-r]", has_text=label).click(); page.wait_for_timeout(300)
+        dates("7 days")
+        t = titles()
+        check("Divisions in the training labels" not in t and len(t) == 4 and page.locator("#range-chip").count() == 1
+              and "added in the last 7 days" in page.locator("#range-chip").inner_text() and "4 of 5" in page.locator("#search-meta").inner_text(),
+              f"7 days hides the deck added in January; a chip says so, 4 of 5 ({t})")
+        page.screenshot(path=OUT / "105_range_7_days.png")
+        page.locator("[data-act=sort]").click(); page.locator(".sheet [data-r=custom]").click()
+        page.locator("#range-from").fill("2026-01-01"); page.locator("#range-to").fill("2026-01-31")
+        page.wait_for_timeout(400); page.screenshot(path=OUT / "106_order_and_dates_sheet.png")
+        page.locator(".sheet [data-r=apply]").click(); page.wait_for_timeout(300)
+        check(titles() == ["Divisions in the training labels"] and "from 1 Jan 2026 to 31 Jan 2026" in page.locator("#range-chip").inner_text(),
+              f"picked dates: only January ({titles()}, {page.locator('#range-chip').inner_text()!r})")
+        page.locator("#deck-search").fill("verify"); page.wait_for_timeout(100)
+        check(titles() == [] and "Nothing here matches" in page.locator("#search-meta").inner_text(), "the search and the dates together")
+        page.locator("#search-x").click()
+        page.reload(); page.wait_for_selector(".hero")
+        check(titles() == ["Divisions in the training labels"] and page.locator("[data-act=sort]", has_text="📅").count() == 1, "the range is kept, and the order button shows it")
+        page.locator("#range-chip [data-act=clearrange]").click(); page.wait_for_timeout(300)
+        check(len(titles()) == 5 and page.locator("#range-chip").count() == 0, "✕ shows every date again")
+        dates("Today"); check(len(titles()) == 4, "Today: the decks added today")
+        dates("Any time"); check(len(titles()) == 5 and page.locator("#range-chip").count() == 0, "Any time: all of them")
+
+        print("Leaving a deck the moment a card is answered")
+        page.goto(base + "#/deck/verify-cnx_adA_3d-v1"); page.wait_for_selector(".card canvas"); page.wait_for_timeout(300)
+        page.keyboard.press("ArrowRight"); page.goto(base + "#/"); page.wait_for_selector(".hero"); page.wait_for_timeout(600)
+        check(not [e for e in errors if "busy" in e] and "1 / 2" in page.locator(".deckrow", has_text="cnx").inner_text(), "no error, and the answer is kept")
         ctx.close()
 
         check(not errors, "no console errors" + ("" if not errors else ": " + " | ".join(errors[:5])))
